@@ -165,16 +165,3 @@ Because the app uses Web Bluetooth, it should be served from a secure context su
 6. Authenticate with the configured BLE password.
 7. Use the control and settings screens to operate the camera.
 
-## Notes For Publishing
-
-This export was prepared to be easier to publish, but before making a public GitHub repo you should still review:
-
-- hardcoded example/default credentials in the firmware
-- OTA host, auth, and network defaults
-- documentation that references local behavior or example secrets
-
-Generated local artifacts such as `.git`, `.pio`, `.cert`, `.logs`, and `node_modules` are not included in this upload-ready copy.
-
-## License / Ownership
-
-Add your preferred license and authorship details here before publishing publicly.
