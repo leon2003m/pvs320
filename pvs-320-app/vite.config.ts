@@ -20,15 +20,19 @@ function collectSubjectAltNames() {
     names.add(`DNS:${hostname}`);
   }
 
-  const networkInterfaces = os.networkInterfaces();
-  for (const entries of Object.values(networkInterfaces)) {
-    if (!entries) continue;
-    for (const entry of entries) {
-      if (entry.internal) continue;
-      if (entry.family === 'IPv4') {
-        names.add(`IP:${entry.address}`);
+  try {
+    const networkInterfaces = os.networkInterfaces();
+    for (const entries of Object.values(networkInterfaces)) {
+      if (!entries) continue;
+      for (const entry of entries) {
+        if (entry.internal) continue;
+        if (entry.family === 'IPv4') {
+          names.add(`IP:${entry.address}`);
+        }
       }
     }
+  } catch {
+    // Some sandboxed environments cannot enumerate interfaces; localhost is enough.
   }
 
   return Array.from(names).join(',');
@@ -135,9 +139,8 @@ function bleLogPlugin(rootDir: string): Plugin {
   };
 }
 
-export default defineConfig(({ mode }) => {
+export default defineConfig(({ command, mode }) => {
   const env = loadEnv(mode, '.', '');
-  const https = ensureHttpsMaterial(process.cwd());
   const rootDir = process.cwd();
 
   return {
@@ -153,7 +156,7 @@ export default defineConfig(({ mode }) => {
     server: {
       host: '0.0.0.0',
       port: 3000,
-      https,
+      https: command === 'serve' ? ensureHttpsMaterial(rootDir) : undefined,
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modify; file watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
