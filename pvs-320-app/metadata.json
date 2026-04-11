@@ -1,0 +1,5 @@
+{
+  "name": "Thermal Camera Controller",
+  "description": "BLE-based controller for ESP32-C3 thermal camera with authentication, profiles, and OTA updates.",
+  "requestFramePermissions": ["bluetooth"]
+}
