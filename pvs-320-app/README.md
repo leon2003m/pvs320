@@ -59,6 +59,20 @@ docker run --rm -p 3000:3000 \
   pvs-320-app
 ```
 
+Example Compose setup:
+
+```bash
+cp docker-compose.example.yml docker-compose.yml
+docker compose up -d
+```
+
+The example file:
+
+- runs `ghcr.io/leon2003m/pvs320-app:latest`
+- publishes port `3000`
+- persists mirrored BLE logs in `./.docker-data`
+- restarts automatically unless stopped
+
 ## Web Bluetooth Note
 
 Web Bluetooth requires a secure context. That means:

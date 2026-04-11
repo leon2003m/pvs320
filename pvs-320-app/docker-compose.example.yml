@@ -1,0 +1,12 @@
+services:
+  pvs-320-app:
+    image: ghcr.io/leon2003m/pvs320-app:latest
+    container_name: pvs-320-app
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: "3000"
+      BLE_LOG_PATH: /data/ble-live.log
+    volumes:
+      - ./.docker-data:/data
+    restart: unless-stopped
