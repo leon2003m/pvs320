@@ -8,8 +8,8 @@
 
 #define USB_BAUD 115200
 #define CAMERA_BAUD 500000
-#define CAMERA_TX_PIN 20
-#define CAMERA_RX_PIN 21
+#define CAMERA_TX_PIN 21
+#define CAMERA_RX_PIN 20
 #define PROFILE_BUTTON_PIN 10
 #define BLE_DEVICE_NAME "ThermalCamera"
 #define OTA_AP_SSID "ThermalCameraOTA"
@@ -79,6 +79,8 @@ void printHelp() {
   Serial.println("  sceen_adjust         -> send command 0x06");
   Serial.println("  manual_adjust        -> send command 0x05");
   Serial.println("  auto <on|off>        -> set auto mode");
+  Serial.println("  set_cam_pins <tx> <rx> -> set camera UART TX/RX pins and restart UART");
+  Serial.println("  camera_pins          -> show current camera UART pins");
   Serial.println("  ota_start            -> start WiFi OTA for 5 minutes");
   Serial.println("  ota_stop             -> stop WiFi OTA immediately");
   Serial.println("  ble_password <pw>    -> set BLE command password");
@@ -296,6 +298,33 @@ void handleCommand(String line) {
 
   if (line.startsWith("auto ")) {
     Serial.println("Invalid auto mode. Use: auto <on|off>");
+    return;
+  }
+
+  if (line == "camera_pins") {
+    Serial.print("Camera UART pins: TX=");
+    Serial.print(camera.getTxPin());
+    Serial.print(" RX=");
+    Serial.println(camera.getRxPin());
+    return;
+  }
+
+  if (line.startsWith("set_cam_pins ")) {
+    int spaceIndex = line.indexOf(' ', 12);
+    if (spaceIndex < 0) {
+      Serial.println("Invalid set_cam_pins. Use: set_cam_pins <tx> <rx>");
+      return;
+    }
+
+    uint8_t txPin;
+    uint8_t rxPin;
+    if (!parseValue(line.substring(12, spaceIndex), 0, 39, txPin) ||
+        !parseValue(line.substring(spaceIndex + 1), 0, 39, rxPin)) {
+      Serial.println("Invalid set_cam_pins. Use: set_cam_pins <tx> <rx>");
+      return;
+    }
+
+    camera.setCameraPins(txPin, rxPin);
     return;
   }
 

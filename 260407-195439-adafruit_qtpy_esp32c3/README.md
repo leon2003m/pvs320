@@ -15,12 +15,6 @@ For a full protocol and implementation reference, see:
 - Profile button: GPIO `10` to GND
 - The profile button uses the ESP32 internal pull-up, so no external resistor is required.
 
-Button wiring:
-
-```text
-GPIO 10 ---- button ---- GND
-```
-
 ## Build And Upload
 
 Default upload is USB serial through `esptool`:
@@ -96,7 +90,7 @@ The status characteristic returns JSON:
   "firmware": "...",
   "modelAgeMs": 1234,
   "firmwareAgeMs": 1234,
-  "rxPin": 21,
+  "rxPin": 19,
   "authenticated": true,
   "otaActive": false,
   "otaRemainingMs": 0,

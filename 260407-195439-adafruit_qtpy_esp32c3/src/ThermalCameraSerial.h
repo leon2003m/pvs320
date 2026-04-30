@@ -10,7 +10,17 @@ public:
   void begin();
   void update();
 
+  int getTxPin() const;
   int getRxPin() const;
+  void setCameraPins(int txPin, int rxPin);
+
+  enum ProtocolMode : uint8_t {
+    PROTOCOL_PVS320 = 0,
+    PROTOCOL_P6 = 1
+  };
+
+  void setProtocolMode(ProtocolMode mode);
+  ProtocolMode getProtocolMode() const;
 
   void toggleDebugMode();
   bool getDebugMode() const;
@@ -26,6 +36,12 @@ public:
   void sendScreenAdjust(bool logToSerial = true);
   void sendManualAdjust(bool logToSerial = true);
   void sendAuto(bool on, bool logToSerial = true);
+
+  void sendP6Calibrate(uint8_t subCmd, uint8_t value = 0, bool logToSerial = true);
+  void sendP6Save(bool logToSerial = true);
+  void sendP6Adjust(uint8_t subCmd, uint8_t value = 0, bool logToSerial = true);
+  void sendP6Zoom(uint8_t value, bool logToSerial = true);
+  void sendP6Palette(uint8_t value, bool logToSerial = true);
 
   String getFirmwareVersion() const;
   String getModelName() const;
@@ -52,6 +68,7 @@ private:
   int cameraTxPin;
   uint32_t cameraBaud;
   bool debugMode;
+  uint8_t protocolMode;
   bool waitingForResponse;
   bool lastRequestSucceeded;
   int silentResponseCount;

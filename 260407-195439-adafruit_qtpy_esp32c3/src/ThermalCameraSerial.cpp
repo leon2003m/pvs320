@@ -47,8 +47,20 @@ void ThermalCameraSerial::begin() {
   beginCam(currentRxPin);
 }
 
+int ThermalCameraSerial::getTxPin() const {
+  return cameraTxPin;
+}
+
 int ThermalCameraSerial::getRxPin() const {
   return currentRxPin;
+}
+
+void ThermalCameraSerial::setCameraPins(int txPin, int rxPin) {
+  cameraTxPin = txPin;
+  beginCam(rxPin);
+  if (cameraTxPin == 0 || cameraTxPin == 1 || currentRxPin == 0 || currentRxPin == 1) {
+    Serial.println("Warning: GPIO 0/1 are usually USB/console pins on ESP32-C3 boards.");
+  }
 }
 
 void ThermalCameraSerial::toggleDebugMode() {
