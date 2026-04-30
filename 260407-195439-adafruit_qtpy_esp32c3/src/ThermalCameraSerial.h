@@ -86,6 +86,7 @@ private:
   void markRequestSent(bool logToSerial);
   uint8_t checksumPayload(const uint8_t* payload, uint16_t payloadLen) const;
   void sendCommand(uint8_t op, uint8_t cmd, const uint8_t* payload, uint16_t payloadLen, bool logToSerial);
+  void sendP6Command(uint8_t cmd, uint8_t subCmd, uint8_t d0, uint8_t d1, bool logToSerial);
 };
 
 #endif

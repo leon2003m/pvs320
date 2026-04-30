@@ -64,31 +64,44 @@ bool parseProfileSet(String text, uint8_t& palette, uint8_t& brightness, uint8_t
 void printHelp() {
   Serial.println();
   Serial.println("Commands:");
-  Serial.println("  init                 -> send init");
-  Serial.println("  fw                   -> send firmware query");
-  Serial.println("  model                -> send model query");
-  Serial.println("  brightness <0-255>   -> set brightness");
-  Serial.println("  contrast <0-7>       -> set contrast");
-  Serial.println("  enhancement <0-7>    -> set enhancement/sharpening");
-  Serial.println("  palette <0-4>        -> set palette");
-  Serial.println("  profile <0-4>        -> apply palette profile");
-  Serial.println("  profile_get <0-4>    -> show palette profile over BLE status");
-  Serial.println("  profile_set <p> <b> <c> <e>");
-  Serial.println("  profile_show         -> show palette profiles");
-  Serial.println("  zoom <1-8>           -> set zoom");
-  Serial.println("  sceen_adjust         -> send command 0x06");
-  Serial.println("  manual_adjust        -> send command 0x05");
-  Serial.println("  auto <on|off>        -> set auto mode");
-  Serial.println("  set_cam_pins <tx> <rx> -> set camera UART TX/RX pins and restart UART");
+  Serial.println("  protocol <pvs320|p6> -> switch camera protocol mode");
+  Serial.println("  protocol            -> show current protocol mode");
   Serial.println("  camera_pins          -> show current camera UART pins");
+  Serial.println("  set_cam_pins <tx> <rx> -> set camera UART TX/RX pins and restart UART");
   Serial.println("  ota_start            -> start WiFi OTA for 5 minutes");
   Serial.println("  ota_stop             -> stop WiFi OTA immediately");
   Serial.println("  ble_password <pw>    -> set BLE command password");
   Serial.println("  ble_name <name>      -> set BLE advertised name");
   Serial.println("  debug                -> toggle debug byte dump");
-  Serial.println("  protocol <pvs320|p6> -> switch camera protocol mode");
-  Serial.println("  protocol            -> show current protocol mode");
   Serial.println("  help");
+
+  if (camera.getProtocolMode() == ThermalCameraSerial::PROTOCOL_P6) {
+    Serial.println("--- P6 compatibility mode ---");
+    Serial.println("  brightness <0-255>   -> set brightness (P6 CMD_ADJUST 0x01)");
+    Serial.println("  contrast <0-7>       -> set contrast (P6 CMD_ADJUST 0x02)");
+    Serial.println("  palette <0-4>        -> set palette (P6 CMD_PALETTE)");
+    Serial.println("  zoom <1-8>           -> set zoom (P6 CMD_ZOOM)");
+    Serial.println("  auto on              -> enable P6 auto-cal");
+    Serial.println("  auto off             -> disable P6 auto-cal");
+    Serial.println("  manual_adjust        -> send P6 manual NUC");
+  } else {
+    Serial.println("--- PVS320 mode ---");
+    Serial.println("  init                 -> send init");
+    Serial.println("  fw                   -> send firmware query");
+    Serial.println("  model                -> send model query");
+    Serial.println("  brightness <0-255>   -> set brightness");
+    Serial.println("  contrast <0-7>       -> set contrast");
+    Serial.println("  enhancement <0-7>    -> set enhancement/sharpening");
+    Serial.println("  palette <0-4>        -> set palette");
+    Serial.println("  profile <0-4>        -> apply palette profile");
+    Serial.println("  profile_get <0-4>    -> show palette profile over BLE status");
+    Serial.println("  profile_set <p> <b> <c> <e>");
+    Serial.println("  profile_show         -> show palette profiles");
+    Serial.println("  zoom <1-8>           -> set zoom");
+    Serial.println("  sceen_adjust         -> send command 0x06");
+    Serial.println("  manual_adjust        -> send command 0x05");
+    Serial.println("  auto <on|off>        -> set auto mode");
+  }
   Serial.println();
 }
 
@@ -219,30 +232,30 @@ void handleCommand(String line) {
   }
 
   if (line.startsWith("brightness ")) {
-    if (camera.getProtocolMode() == ThermalCameraSerial::PROTOCOL_P6) {
-      Serial.println("Command 'brightness' is not supported in P6 compatibility mode.");
-      return;
-    }
     uint8_t value;
     if (!parseValue(line.substring(11), 0, 255, value)) {
       Serial.println("Invalid brightness. Use: brightness <0-255>");
       return;
     }
-    camera.sendBrightness(value);
+    if (camera.getProtocolMode() == ThermalCameraSerial::PROTOCOL_P6) {
+      camera.sendP6Adjust(0x01, value);
+    } else {
+      camera.sendBrightness(value);
+    }
     return;
   }
 
   if (line.startsWith("contrast ")) {
-    if (camera.getProtocolMode() == ThermalCameraSerial::PROTOCOL_P6) {
-      Serial.println("Command 'contrast' is not supported in P6 compatibility mode.");
-      return;
-    }
     uint8_t value;
     if (!parseValue(line.substring(9), 0, 7, value)) {
       Serial.println("Invalid contrast. Use: contrast <0-7>");
       return;
     }
-    camera.sendContrast(value);
+    if (camera.getProtocolMode() == ThermalCameraSerial::PROTOCOL_P6) {
+      camera.sendP6Adjust(0x02, value);
+    } else {
+      camera.sendContrast(value);
+    }
     return;
   }
 
@@ -347,7 +360,7 @@ void handleCommand(String line) {
 
   if (line == "manual_adjust") {
     if (camera.getProtocolMode() == ThermalCameraSerial::PROTOCOL_P6) {
-      Serial.println("Command 'manual_adjust' is not supported in P6 compatibility mode.");
+      camera.sendP6Calibrate(0x02);
       return;
     }
     camera.sendManualAdjust();
@@ -382,12 +395,6 @@ void handleCommand(String line) {
     Serial.print(camera.getTxPin());
     Serial.print(" RX=");
     Serial.println(camera.getRxPin());
-    return;
-  }
-
-  if (line == "protocol") {
-    Serial.print("Current protocol: ");
-    Serial.println(camera.getProtocolMode() == ThermalCameraSerial::PROTOCOL_P6 ? "P6" : "PVS320");
     return;
   }
 

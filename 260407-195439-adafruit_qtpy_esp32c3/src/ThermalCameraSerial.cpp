@@ -13,6 +13,7 @@ ThermalCameraSerial::ThermalCameraSerial(HardwareSerial& serialRef, int txPin, i
     cameraTxPin(txPin),
     cameraBaud(baud),
     debugMode(false),
+    protocolMode(PROTOCOL_PVS320),
     waitingForResponse(false),
     lastRequestSucceeded(false),
     silentResponseCount(0),
@@ -160,6 +161,60 @@ void ThermalCameraSerial::sendAuto(bool on, bool logToSerial) {
     Serial.print("Sent AUTO ");
     Serial.println(on ? "ON" : "OFF");
   }
+}
+
+void ThermalCameraSerial::setProtocolMode(ProtocolMode mode) {
+  protocolMode = mode;
+}
+
+ThermalCameraSerial::ProtocolMode ThermalCameraSerial::getProtocolMode() const {
+  return static_cast<ProtocolMode>(protocolMode);
+}
+
+void ThermalCameraSerial::sendP6Command(uint8_t cmd, uint8_t subCmd, uint8_t d0, uint8_t d1, bool logToSerial) {
+  uint8_t pkt[13] = {0x55, cmd, subCmd, d0, d1, 0, 0, 0, 0, 0, 0, 0, 0xAA};
+  uint8_t checksum = 0;
+  for (int i = 0; i < 11; i++) {
+    checksum = (uint8_t)(checksum + pkt[i]);
+  }
+  pkt[11] = checksum;
+
+  camSerial.write(pkt, sizeof(pkt));
+  camSerial.flush();
+
+  if (logToSerial) {
+    Serial.print("Sent P6 command 0x");
+    printHex(cmd);
+    Serial.print(" sub=0x");
+    printHex(subCmd);
+    if (d0 || d1) {
+      Serial.print(" data=0x");
+      printHex(d0);
+      Serial.print(" 0x");
+      printHex(d1);
+    }
+    Serial.println();
+  }
+}
+
+void ThermalCameraSerial::sendP6Calibrate(uint8_t subCmd, uint8_t value, bool logToSerial) {
+  sendP6Command(0x26, subCmd, value, 0, logToSerial);
+}
+
+void ThermalCameraSerial::sendP6Save(bool logToSerial) {
+  sendP6Command(0x29, 0x00, 0, 0, logToSerial);
+}
+
+void ThermalCameraSerial::sendP6Adjust(uint8_t subCmd, uint8_t value, bool logToSerial) {
+  sendP6Command(0x2A, subCmd, value, 0, logToSerial);
+}
+
+void ThermalCameraSerial::sendP6Zoom(uint8_t value, bool logToSerial) {
+  sendP6Command(0x2B, value, 0, 0, logToSerial);
+}
+
+void ThermalCameraSerial::sendP6Palette(uint8_t value, bool logToSerial) {
+  sendP6Command(0x2D, value, 0, 0, logToSerial);
 }
 
 String ThermalCameraSerial::getFirmwareVersion() const {
