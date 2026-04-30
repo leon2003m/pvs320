@@ -86,6 +86,8 @@ void printHelp() {
   Serial.println("  ble_password <pw>    -> set BLE command password");
   Serial.println("  ble_name <name>      -> set BLE advertised name");
   Serial.println("  debug                -> toggle debug byte dump");
+  Serial.println("  protocol <pvs320|p6> -> switch camera protocol mode");
+  Serial.println("  protocol            -> show current protocol mode");
   Serial.println("  help");
   Serial.println();
 }
@@ -99,12 +101,38 @@ void handleCommand(String line) {
     return;
   }
 
+  if (line == "protocol") {
+    Serial.print("Current protocol: ");
+    Serial.println(camera.getProtocolMode() == ThermalCameraSerial::PROTOCOL_P6 ? "P6" : "PVS320");
+    return;
+  }
+
+  if (line == "protocol pvs320") {
+    camera.setProtocolMode(ThermalCameraSerial::PROTOCOL_PVS320);
+    Serial.println("Switched to PVS320 camera protocol mode.");
+    return;
+  }
+
+  if (line == "protocol p6") {
+    camera.setProtocolMode(ThermalCameraSerial::PROTOCOL_P6);
+    Serial.println("Switched to P6 compatibility mode.");
+    return;
+  }
+
   if (line == "init") {
+    if (camera.getProtocolMode() == ThermalCameraSerial::PROTOCOL_P6) {
+      Serial.println("Command 'init' is not supported in P6 compatibility mode.");
+      return;
+    }
     camera.sendInit();
     return;
   }
 
   if (line == "fw") {
+    if (camera.getProtocolMode() == ThermalCameraSerial::PROTOCOL_P6) {
+      Serial.println("Command 'fw' is not supported in P6 compatibility mode.");
+      return;
+    }
     if (!camera.queryFirmware()) {
       Serial.println(camera.getFirmwareVersion());
     }
@@ -112,6 +140,10 @@ void handleCommand(String line) {
   }
 
   if (line == "model") {
+    if (camera.getProtocolMode() == ThermalCameraSerial::PROTOCOL_P6) {
+      Serial.println("Command 'model' is not supported in P6 compatibility mode.");
+      return;
+    }
     if (!camera.queryModel()) {
       Serial.println(camera.getModelName());
     }
@@ -187,6 +219,10 @@ void handleCommand(String line) {
   }
 
   if (line.startsWith("brightness ")) {
+    if (camera.getProtocolMode() == ThermalCameraSerial::PROTOCOL_P6) {
+      Serial.println("Command 'brightness' is not supported in P6 compatibility mode.");
+      return;
+    }
     uint8_t value;
     if (!parseValue(line.substring(11), 0, 255, value)) {
       Serial.println("Invalid brightness. Use: brightness <0-255>");
@@ -197,6 +233,10 @@ void handleCommand(String line) {
   }
 
   if (line.startsWith("contrast ")) {
+    if (camera.getProtocolMode() == ThermalCameraSerial::PROTOCOL_P6) {
+      Serial.println("Command 'contrast' is not supported in P6 compatibility mode.");
+      return;
+    }
     uint8_t value;
     if (!parseValue(line.substring(9), 0, 7, value)) {
       Serial.println("Invalid contrast. Use: contrast <0-7>");
@@ -207,6 +247,10 @@ void handleCommand(String line) {
   }
 
   if (line.startsWith("enhancement ")) {
+    if (camera.getProtocolMode() == ThermalCameraSerial::PROTOCOL_P6) {
+      Serial.println("Command 'enhancement' is not supported in P6 compatibility mode.");
+      return;
+    }
     uint8_t value;
     if (!parseValue(line.substring(12), 0, 7, value)) {
       Serial.println("Invalid enhancement. Use: enhancement <0-7>");
@@ -222,12 +266,20 @@ void handleCommand(String line) {
       Serial.println("Invalid palette. Use: palette <0-4>");
       return;
     }
-    camera.sendPalette(value);
+    if (camera.getProtocolMode() == ThermalCameraSerial::PROTOCOL_P6) {
+      camera.sendP6Palette(value);
+    } else {
+      camera.sendPalette(value);
+    }
     return;
   }
 
   if (line.startsWith("profile_set ")) {
 #if ENABLE_PROFILES
+    if (camera.getProtocolMode() == ThermalCameraSerial::PROTOCOL_P6) {
+      Serial.println("Profiles are not supported in P6 compatibility mode.");
+      return;
+    }
     uint8_t palette;
     uint8_t brightness;
     uint8_t contrast;
@@ -245,6 +297,10 @@ void handleCommand(String line) {
 
   if (line.startsWith("profile ")) {
 #if ENABLE_PROFILES
+    if (camera.getProtocolMode() == ThermalCameraSerial::PROTOCOL_P6) {
+      Serial.println("Profiles are not supported in P6 compatibility mode.");
+      return;
+    }
     uint8_t value;
     if (!parseValue(line.substring(8), 0, 4, value)) {
       Serial.println("Invalid profile. Use: profile <0-4>");
@@ -272,27 +328,47 @@ void handleCommand(String line) {
       Serial.println("Invalid zoom. Use: zoom <1-8>");
       return;
     }
-    camera.sendZoom(value);
+    if (camera.getProtocolMode() == ThermalCameraSerial::PROTOCOL_P6) {
+      camera.sendP6Zoom(value);
+    } else {
+      camera.sendZoom(value);
+    }
     return;
   }
 
   if (line == "sceen_adjust") {
+    if (camera.getProtocolMode() == ThermalCameraSerial::PROTOCOL_P6) {
+      Serial.println("Command 'sceen_adjust' is not supported in P6 compatibility mode.");
+      return;
+    }
     camera.sendScreenAdjust();
     return;
   }
 
   if (line == "manual_adjust") {
+    if (camera.getProtocolMode() == ThermalCameraSerial::PROTOCOL_P6) {
+      Serial.println("Command 'manual_adjust' is not supported in P6 compatibility mode.");
+      return;
+    }
     camera.sendManualAdjust();
     return;
   }
 
   if (line == "auto on") {
-    camera.sendAuto(true);
+    if (camera.getProtocolMode() == ThermalCameraSerial::PROTOCOL_P6) {
+      camera.sendP6Calibrate(0x01, 0x01);
+    } else {
+      camera.sendAuto(true);
+    }
     return;
   }
 
   if (line == "auto off") {
-    camera.sendAuto(false);
+    if (camera.getProtocolMode() == ThermalCameraSerial::PROTOCOL_P6) {
+      camera.sendP6Calibrate(0x01, 0x00);
+    } else {
+      camera.sendAuto(false);
+    }
     return;
   }
 
@@ -306,6 +382,12 @@ void handleCommand(String line) {
     Serial.print(camera.getTxPin());
     Serial.print(" RX=");
     Serial.println(camera.getRxPin());
+    return;
+  }
+
+  if (line == "protocol") {
+    Serial.print("Current protocol: ");
+    Serial.println(camera.getProtocolMode() == ThermalCameraSerial::PROTOCOL_P6 ? "P6" : "PVS320");
     return;
   }
 
