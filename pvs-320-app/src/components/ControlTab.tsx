@@ -9,7 +9,7 @@ export default function ControlTab() {
   const [brightness, setBrightness] = useState(128);
   const [contrast, setContrast] = useState(4);
   const [enhancement, setEnhancement] = useState(4);
-  const [zoom, setZoom] = useState(1);
+  const [zoom, setZoom] = useState(10);
   const [palette, setPalette] = useState<PaletteIndex>(0);
 
   useEffect(() => {
@@ -196,10 +196,10 @@ export default function ControlTab() {
         />
 
         <SliderGroup
-          label="Zoom"
+          label="Zoom (10-40 = 1.0x-4.0x)"
           value={zoom}
-          min={1}
-          max={8}
+          min={10}
+          max={40}
           icon={Maximize}
           onChange={setZoom}
           onRelease={(v: number) => run(bleService.setZoom(v))}

@@ -398,6 +398,8 @@ void ThermalCameraBleServer::appendCapabilities(JsonArray operations) const {
   operations.add("calibration.manual");
   operations.add("calibration.screenAdjust");
   operations.add("calibration.setAuto");
+  operations.add("calibration.dpc");
+  operations.add("calibration.saveToCamera");
   operations.add("device.setBleName");
   operations.add("ota.start");
   operations.add("ota.stop");
@@ -750,6 +752,11 @@ bool ThermalCameraBleServer::parseProfileIndex(String text, uint8_t& palette) co
 }
 
 BleCommandResult ThermalCameraBleServer::awaitCameraCommand(const String& successMessage) {
+  // P6 commands are fire-and-forget: the camera sends no PVS320-style ack, so
+  // don't wait (that would always report camera_timeout).
+  if (camera.getProtocolMode() == ThermalCameraSerial::PROTOCOL_P6) {
+    return okResult(successMessage);
+  }
   if (!camera.awaitResponse()) {
     return errorResult("camera_timeout", "Camera did not respond in time");
   }
@@ -758,6 +765,10 @@ BleCommandResult ThermalCameraBleServer::awaitCameraCommand(const String& succes
 }
 
 BleCommandResult ThermalCameraBleServer::refreshIdentityState(const String& successMessage) {
+  // P6 cameras don't answer identity queries; report success with empty identity.
+  if (camera.getProtocolMode() == ThermalCameraSerial::PROTOCOL_P6) {
+    return okResult(successMessage);
+  }
   if (!camera.refreshIdentity()) {
     return errorResult("device_unreachable", "Camera identity could not be refreshed");
   }
@@ -1028,8 +1039,8 @@ BleCommandResult ThermalCameraBleServer::dispatchRpcRequest(
 
   if (op == "image.setPalette") {
     uint8_t value;
-    if (!parseJsonUint8(args["value"], 0, 4, value)) {
-      return errorResult("invalid_args", "value must be 0-4");
+    if (!parseJsonUint8(args["value"], 0, 5, value)) {
+      return errorResult("invalid_args", "value must be 0-5");
     }
 
     camera.sendPalette(value, false);
@@ -1043,8 +1054,8 @@ BleCommandResult ThermalCameraBleServer::dispatchRpcRequest(
 
   if (op == "image.setZoom") {
     uint8_t value;
-    if (!parseJsonUint8(args["value"], 1, 8, value)) {
-      return errorResult("invalid_args", "value must be 1-8");
+    if (!parseJsonUint8(args["value"], 1, 40, value)) {
+      return errorResult("invalid_args", "value must be 1-40 (1-8 = 1.0x-4.0x, 10-40 = fine 0.1x steps)");
     }
 
     camera.sendZoom(value, false);
@@ -1080,9 +1091,27 @@ BleCommandResult ThermalCameraBleServer::dispatchRpcRequest(
     camera.sendAuto(enabled, false);
     BleCommandResult result = awaitCameraCommand(enabled ? "Auto calibration enabled" : "Auto calibration disabled");
     if (!result.ok) return result;
+    // Persist to the same NVS slot the physical rotary control restores on boot.
+    Preferences p6prefs;
+    if (p6prefs.begin("p6rotary", false)) {
+      p6prefs.putBool("autocal", enabled);
+      p6prefs.end();
+    }
     responseDoc["result"]["enabled"] = enabled;
     publishStateAfterResponse = true;
     return okResult(enabled ? "Auto calibration enabled" : "Auto calibration disabled");
+  }
+
+  if (op == "calibration.dpc") {
+    // Full dead-pixel correction + permanent save to the camera core (~3.2s).
+    camera.runP6Dpc(false);
+    publishStateAfterResponse = true;
+    return okResult("Dead pixel correction complete");
+  }
+
+  if (op == "calibration.saveToCamera") {
+    camera.sendP6Save(false);
+    return okResult("Settings saved to camera");
   }
 
   if (op == "device.setBleName") {
@@ -1264,8 +1293,8 @@ void ThermalCameraBleServer::handleCommand(String command) {
   if (command.startsWith("palette ") || command.startsWith("set_palette ")) {
     int offset = command.startsWith("palette ") ? 8 : 12;
     uint8_t value;
-    if (!parseValue(command.substring(offset), 0, 4, value)) {
-      publishLegacyResponse("ERR palette <0-4>");
+    if (!parseValue(command.substring(offset), 0, 5, value)) {
+      publishLegacyResponse("ERR palette <0-5>");
       return;
     }
     camera.sendPalette(value, false);
@@ -1318,8 +1347,8 @@ void ThermalCameraBleServer::handleCommand(String command) {
   if (command.startsWith("zoom ") || command.startsWith("set_zoom ")) {
     int offset = command.startsWith("zoom ") ? 5 : 9;
     uint8_t value;
-    if (!parseValue(command.substring(offset), 1, 8, value)) {
-      publishLegacyResponse("ERR zoom <1-8>");
+    if (!parseValue(command.substring(offset), 1, 40, value)) {
+      publishLegacyResponse("ERR zoom <1-40>");
       return;
     }
     camera.sendZoom(value, false);
@@ -1345,19 +1374,33 @@ void ThermalCameraBleServer::handleCommand(String command) {
     return;
   }
 
-  if (command == "auto on" || command == "action_auto on") {
-    camera.sendAuto(true, false);
-    BleCommandResult result = awaitCameraCommand("OK auto on");
+  if (command == "auto on" || command == "action_auto on" ||
+      command == "auto off" || command == "action_auto off") {
+    bool enabled = (command == "auto on" || command == "action_auto on");
+    camera.sendAuto(enabled, false);
+    BleCommandResult result = awaitCameraCommand(enabled ? "OK auto on" : "OK auto off");
+    if (result.ok) {
+      Preferences p6prefs;
+      if (p6prefs.begin("p6rotary", false)) {
+        p6prefs.putBool("autocal", enabled);
+        p6prefs.end();
+      }
+    }
     publishLegacyResponse(result.ok ? result.message : "ERR camera timeout");
     publishStateEvent(true);
     return;
   }
 
-  if (command == "auto off" || command == "action_auto off") {
-    camera.sendAuto(false, false);
-    BleCommandResult result = awaitCameraCommand("OK auto off");
-    publishLegacyResponse(result.ok ? result.message : "ERR camera timeout");
+  if (command == "dpc" || command == "action_dpc") {
+    camera.runP6Dpc(false); // full DPC + save to camera core (~3.2s)
+    publishLegacyResponse("OK dpc");
     publishStateEvent(true);
+    return;
+  }
+
+  if (command == "camera_save" || command == "action_camera_save") {
+    camera.sendP6Save(false);
+    publishLegacyResponse("OK camera_save");
     return;
   }
 

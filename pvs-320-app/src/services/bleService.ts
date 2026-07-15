@@ -70,6 +70,8 @@ export interface BLEService {
   setAutoCalibration: (enabled: boolean) => Promise<void>;
   runManualCalibration: () => Promise<void>;
   runScreenAdjust: () => Promise<void>;
+  runDpc: () => Promise<void>;
+  saveToCamera: () => Promise<void>;
   setBleName: (name: string) => Promise<void>;
   startOta: () => Promise<void>;
   stopOta: () => Promise<void>;
@@ -148,6 +150,8 @@ class ThermalBLEService implements BLEService {
       'calibration.manual',
       'calibration.screenAdjust',
       'calibration.setAuto',
+      'calibration.dpc',
+      'calibration.saveToCamera',
       'device.setBleName',
       'ota.start',
       'ota.stop'
@@ -850,6 +854,15 @@ class ThermalBLEService implements BLEService {
     await this.request('calibration.screenAdjust');
   }
 
+  async runDpc() {
+    // DPC blocks the device for ~3.2s (calibrate + save), so allow a longer timeout.
+    await this.request('calibration.dpc', {}, 8000);
+  }
+
+  async saveToCamera() {
+    await this.request('calibration.saveToCamera');
+  }
+
   async setBleName(name: string) {
     await this.request('device.setBleName', { name });
   }
@@ -983,6 +996,12 @@ class ThermalBLEService implements BLEService {
         break;
       case 'calibration.screenAdjust':
         this.mockStatus.lastResponse = 'Screen adjust started';
+        break;
+      case 'calibration.dpc':
+        this.mockStatus.lastResponse = 'Dead pixel correction complete';
+        break;
+      case 'calibration.saveToCamera':
+        this.mockStatus.lastResponse = 'Settings saved to camera';
         break;
       case 'device.setBleName':
         this.mockStatus.bleName = String(args.name ?? DEVICE_NAME);

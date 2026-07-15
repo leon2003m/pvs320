@@ -3,6 +3,9 @@
 
 static const unsigned long FRAME_TIMEOUT_MS = 600;
 
+// P6 contrast steps (index 0-7) used when translating PVS320 contrast to P6.
+static const uint8_t P6_CONTRAST_STEPS[8] = {32, 64, 96, 128, 160, 192, 224, 255};
+
 ThermalCameraSerial::ThermalCameraSerial(HardwareSerial& serialRef, int txPin, int rxPin, uint32_t baud)
   : camSerial(serialRef),
     lastFrameByteMs(0),
@@ -13,7 +16,7 @@ ThermalCameraSerial::ThermalCameraSerial(HardwareSerial& serialRef, int txPin, i
     cameraTxPin(txPin),
     cameraBaud(baud),
     debugMode(false),
-    protocolMode(PROTOCOL_PVS320),
+    protocolMode(PROTOCOL_P6),
     waitingForResponse(false),
     lastRequestSucceeded(false),
     silentResponseCount(0),
@@ -75,24 +78,44 @@ bool ThermalCameraSerial::getDebugMode() const {
 }
 
 void ThermalCameraSerial::sendInit(bool logToSerial) {
+  if (protocolMode == PROTOCOL_P6) {
+    if (logToSerial) Serial.println("INIT ignored (P6 mode)");
+    return;
+  }
   uint8_t payload[] = {0x01, 0x01};
   sendCommand('W', 0x98, payload, sizeof(payload), logToSerial);
   if (logToSerial) Serial.println("Sent INIT");
 }
 
 void ThermalCameraSerial::sendFw(bool logToSerial) {
+  if (protocolMode == PROTOCOL_P6) {
+    if (logToSerial) Serial.println("FW query not supported (P6 mode)");
+    return;
+  }
   uint8_t payload[] = {0x00, 0x00};
   sendCommand('R', 0x5A, payload, sizeof(payload), logToSerial);
   if (logToSerial) Serial.println("Sent FW");
 }
 
 void ThermalCameraSerial::sendModel(bool logToSerial) {
+  if (protocolMode == PROTOCOL_P6) {
+    if (logToSerial) Serial.println("MODEL query not supported (P6 mode)");
+    return;
+  }
   uint8_t payload[] = {0x00, 0x00};
   sendCommand('R', 0x57, payload, sizeof(payload), logToSerial);
   if (logToSerial) Serial.println("Sent MODEL");
 }
 
 void ThermalCameraSerial::sendBrightness(uint8_t value, bool logToSerial) {
+  if (protocolMode == PROTOCOL_P6) {
+    // PVS320 brightness is 0-255; P6 brightness is 0-128 -> scale.
+    uint8_t p6 = (uint8_t)((uint16_t)value * 128 / 255);
+    sendP6Adjust(0x01, p6, false);
+    currentBrightness = value;
+    if (logToSerial) { Serial.print("Sent BRIGHTNESS(P6) "); Serial.println(value); }
+    return;
+  }
   uint8_t payload[] = {value, 0x00};
   sendCommand('W', 0x31, payload, sizeof(payload), logToSerial);
   currentBrightness = value;
@@ -103,6 +126,14 @@ void ThermalCameraSerial::sendBrightness(uint8_t value, bool logToSerial) {
 }
 
 void ThermalCameraSerial::sendContrast(uint8_t value, bool logToSerial) {
+  if (protocolMode == PROTOCOL_P6) {
+    // PVS320 contrast is an index 0-7; P6 wants the actual step value.
+    uint8_t idx = value & 0x07;
+    sendP6Adjust(0x02, P6_CONTRAST_STEPS[idx], false);
+    currentContrast = value;
+    if (logToSerial) { Serial.print("Sent CONTRAST(P6) "); Serial.println(value); }
+    return;
+  }
   uint8_t payload[] = {value, 0x80};
   sendCommand('W', 0x32, payload, sizeof(payload), logToSerial);
   currentContrast = value;
@@ -113,6 +144,12 @@ void ThermalCameraSerial::sendContrast(uint8_t value, bool logToSerial) {
 }
 
 void ThermalCameraSerial::sendEnhancement(uint8_t value, bool logToSerial) {
+  if (protocolMode == PROTOCOL_P6) {
+    // P6 has no enhancement/sharpening command; keep state for BLE display only.
+    currentEnhancement = value;
+    if (logToSerial) Serial.println("ENHANCEMENT ignored (P6 mode)");
+    return;
+  }
   uint8_t payload[] = {0x01, value};
   sendCommand('W', 0x29, payload, sizeof(payload), logToSerial);
   currentEnhancement = value;
@@ -123,6 +160,12 @@ void ThermalCameraSerial::sendEnhancement(uint8_t value, bool logToSerial) {
 }
 
 void ThermalCameraSerial::sendPalette(uint8_t value, bool logToSerial) {
+  if (protocolMode == PROTOCOL_P6) {
+    sendP6Palette(value, false);
+    currentPalette = value;
+    if (logToSerial) { Serial.print("Sent PALETTE(P6) "); Serial.println(value); }
+    return;
+  }
   uint8_t payload[] = {value, 0x00};
   sendCommand('W', 0x23, payload, sizeof(payload), logToSerial);
   currentPalette = value;
@@ -133,6 +176,22 @@ void ThermalCameraSerial::sendPalette(uint8_t value, bool logToSerial) {
 }
 
 void ThermalCameraSerial::sendZoom(uint8_t value, bool logToSerial) {
+  if (protocolMode == PROTOCOL_P6) {
+    // P6 zoom is 10-40 (0.1x steps, 1.0x-4.0x).
+    //  - value 1-8   : legacy slider -> spread across the FULL range (finer than x10)
+    //  - value 9-40  : direct P6 step (fine 0.1x control for an updated UI)
+    uint16_t z;
+    if (value <= 8) {
+      z = 10 + (uint16_t)(value - 1) * 30 / 7; // 1->10 (1.0x) ... 8->40 (4.0x)
+    } else {
+      z = value;                               // direct P6 zoom step
+    }
+    if (z < 10) z = 10;
+    if (z > 40) z = 40;
+    sendP6Raw(0x2B, 0x00, (uint8_t)z, 0, false);
+    if (logToSerial) { Serial.print("Sent ZOOM(P6) "); Serial.println(z); }
+    return;
+  }
   uint8_t payload[] = {value, 0x00};
   sendCommand('W', 0x44, payload, sizeof(payload), logToSerial);
   if (logToSerial) {
@@ -142,18 +201,32 @@ void ThermalCameraSerial::sendZoom(uint8_t value, bool logToSerial) {
 }
 
 void ThermalCameraSerial::sendScreenAdjust(bool logToSerial) {
+  if (protocolMode == PROTOCOL_P6) {
+    if (logToSerial) Serial.println("SCREEN_ADJUST not supported (P6 mode)");
+    return;
+  }
   uint8_t payload[] = {0x00, 0x00};
   sendCommand('W', 0x06, payload, sizeof(payload), logToSerial);
   if (logToSerial) Serial.println("Sent SCREEN_ADJUST");
 }
 
 void ThermalCameraSerial::sendManualAdjust(bool logToSerial) {
+  if (protocolMode == PROTOCOL_P6) {
+    sendP6Calibrate(0x02, 0, false); // P6 manual NUC
+    if (logToSerial) Serial.println("Sent MANUAL_ADJUST(P6 NUC)");
+    return;
+  }
   uint8_t payload[] = {0x00, 0x00};
   sendCommand('W', 0x05, payload, sizeof(payload), logToSerial);
   if (logToSerial) Serial.println("Sent MANUAL_ADJUST");
 }
 
 void ThermalCameraSerial::sendAuto(bool on, bool logToSerial) {
+  if (protocolMode == PROTOCOL_P6) {
+    sendP6Calibrate(0x01, on ? 0x01 : 0x00, false); // P6 auto-cal toggle
+    if (logToSerial) { Serial.print("Sent AUTO(P6) "); Serial.println(on ? "ON" : "OFF"); }
+    return;
+  }
   uint8_t payload[16] = {0};
   payload[0] = on ? 0x0D : 0x01;
   sendCommand('W', 0x67, payload, sizeof(payload), logToSerial);
@@ -210,11 +283,26 @@ void ThermalCameraSerial::sendP6Adjust(uint8_t subCmd, uint8_t value, bool logTo
 }
 
 void ThermalCameraSerial::sendP6Zoom(uint8_t value, bool logToSerial) {
-  sendP6Command(0x2B, value, 0, 0, logToSerial);
+  // P6 zoom carries its value in d0 with subCmd 0x00 (matches the original sketch).
+  sendP6Command(0x2B, 0x00, value, 0, logToSerial);
 }
 
 void ThermalCameraSerial::sendP6Palette(uint8_t value, bool logToSerial) {
   sendP6Command(0x2D, value, 0, 0, logToSerial);
+}
+
+void ThermalCameraSerial::sendP6Raw(uint8_t cmd, uint8_t subCmd, uint8_t d0, uint8_t d1, bool logToSerial) {
+  sendP6Command(cmd, subCmd, d0, d1, logToSerial);
+}
+
+void ThermalCameraSerial::runP6Dpc(bool logToSerial) {
+  if (logToSerial) Serial.println("P6 DPC: start");
+  sendP6Command(0x26, 0x02, 0, 0, false); // Start DPC (CMD_CALIBRATE 0x02)
+  delay(3000);                            // Dwell for camera processing
+  sendP6Command(0x26, 0x03, 0, 0, false); // End DPC (CMD_CALIBRATE 0x03)
+  delay(150);
+  sendP6Command(0x29, 0x00, 0, 0, false); // Permanent save to camera core (CMD_SAVE)
+  if (logToSerial) Serial.println("P6 DPC: done + saved");
 }
 
 String ThermalCameraSerial::getFirmwareVersion() const {

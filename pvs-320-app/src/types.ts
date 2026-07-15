@@ -1,4 +1,4 @@
-export type PaletteIndex = 0 | 1 | 2 | 3 | 4;
+export type PaletteIndex = 0 | 1 | 2 | 3 | 4 | 5;
 
 export interface DeviceStatus {
   bleName?: string;
@@ -105,6 +105,7 @@ export const PALETTE_NAMES: Record<PaletteIndex, string> = {
   2: 'Iron',
   3: 'Red Hot',
   4: 'Green Light',
+  5: 'Rainbow',
 };
 
 export const PROTOCOL_VERSION = 2;
