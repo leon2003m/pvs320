@@ -144,19 +144,34 @@ export default function SettingsTab() {
         </div>
 
         <div className="grid grid-cols-2 gap-3">
-          <button 
+          <button
             onClick={() => run(bleService.runScreenAdjust())}
             className="py-4 bg-slate-900 border border-slate-800 rounded-xl font-semibold text-slate-300 hover:bg-slate-800 transition-all"
           >
             Sceen Adjust
           </button>
-          <button 
+          <button
             onClick={() => run(bleService.runManualCalibration())}
             className="py-4 bg-slate-900 border border-slate-800 rounded-xl font-semibold text-slate-300 hover:bg-slate-800 transition-all"
           >
             Manual Adjust
           </button>
+          <button
+            onClick={() => run(bleService.runDpc())}
+            className="py-4 bg-slate-900 border border-slate-800 rounded-xl font-semibold text-slate-300 hover:bg-slate-800 transition-all"
+          >
+            Dead Pixel Correction
+          </button>
+          <button
+            onClick={() => run(bleService.saveToCamera())}
+            className="py-4 bg-slate-900 border border-slate-800 rounded-xl font-semibold text-slate-300 hover:bg-slate-800 transition-all"
+          >
+            Save to Camera
+          </button>
         </div>
+        <p className="text-[10px] text-slate-500 ml-1">
+          Dead Pixel Correction runs a ~3s calibration and permanently saves it to the camera core.
+        </p>
       </section>
 
       {/* Security Section */}

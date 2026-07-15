@@ -42,6 +42,13 @@ public:
   void sendP6Adjust(uint8_t subCmd, uint8_t value = 0, bool logToSerial = true);
   void sendP6Zoom(uint8_t value, bool logToSerial = true);
   void sendP6Palette(uint8_t value, bool logToSerial = true);
+  // Send an explicit P6 packet {0x55, cmd, subCmd, d0, d1, ...}. Used by the
+  // physical rotary control to reproduce byte-exact framing from the original
+  // P6 sketch (e.g. zoom carries its value in d0, not subCmd).
+  void sendP6Raw(uint8_t cmd, uint8_t subCmd, uint8_t d0 = 0, uint8_t d1 = 0, bool logToSerial = true);
+  // Full P6 Dead Pixel Correction: start (0x02), ~3s dwell, end (0x03), then
+  // persist to the camera core (CMD_SAVE). Blocks ~3.2s. No LED feedback here.
+  void runP6Dpc(bool logToSerial = true);
 
   String getFirmwareVersion() const;
   String getModelName() const;

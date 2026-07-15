@@ -5,9 +5,10 @@
 #include "ThermalCameraProfileButton.h"
 #include "ThermalCameraBleServer.h"
 #include "ThermalCameraOta.h"
+#include "ThermalCameraRotaryControl.h"
 
 #define USB_BAUD 115200
-#define CAMERA_BAUD 500000
+#define CAMERA_BAUD 115200
 #define CAMERA_TX_PIN 21
 #define CAMERA_RX_PIN 20
 #define PROFILE_BUTTON_PIN 10
@@ -21,12 +22,25 @@
 #define ENABLE_PROFILES 1
 #define ENABLE_PROFILE_BUTTON 1
 
+// Physical rotary/thumb control surface (ported from the P6 sketch)
+#define ENABLE_ROTARY_CONTROL 1
+#define ROTARY_A_PIN 0
+#define ROTARY_B_PIN 1
+#define ROTARY_SW_PIN 7
+#define THUMB_BUTTON_PIN 6
+#define STATUS_LED_PIN 8
+
 HardwareSerial CAM_SERIAL(1);
 ThermalCameraSerial camera(CAM_SERIAL, CAMERA_TX_PIN, CAMERA_RX_PIN, CAMERA_BAUD);
 ThermalCameraProfiles profiles(camera);
 ThermalCameraProfileButton profileButton(PROFILE_BUTTON_PIN, profiles);
 ThermalCameraOta otaUpdater(OTA_AP_SSID, OTA_AP_PASSWORD, OTA_PASSWORD, OTA_HOSTNAME);
 ThermalCameraBleServer* bleServer = nullptr;
+#if ENABLE_ROTARY_CONTROL
+ThermalCameraRotaryControl rotaryControl(camera, otaUpdater,
+                                         ROTARY_A_PIN, ROTARY_B_PIN, ROTARY_SW_PIN,
+                                         THUMB_BUTTON_PIN, STATUS_LED_PIN);
+#endif
 
 String inputLine;
 
@@ -437,6 +451,9 @@ void setup() {
   bleServer = new ThermalCameraBleServer(camera, profiles, otaUpdater, BLE_DEVICE_NAME);
   bleServer->begin();
 #endif
+#if ENABLE_ROTARY_CONTROL
+  rotaryControl.begin();
+#endif
 
   Serial.println("Manual UART tester ready");
   printHelp();
@@ -458,6 +475,9 @@ void loop() {
   camera.update();
 #if ENABLE_PROFILE_BUTTON
   profileButton.update();
+#endif
+#if ENABLE_ROTARY_CONTROL
+  rotaryControl.update();
 #endif
 #if ENABLE_BLE
   if (bleServer) bleServer->update();
