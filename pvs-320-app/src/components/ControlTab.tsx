@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { bleService } from '../services/bleService';
 import { DeviceStatus, PALETTE_NAMES, PaletteIndex } from '../types';
-import { Sliders, Maximize, Sun, Contrast, Zap } from 'lucide-react';
+import { Sliders, Maximize, Sun, Contrast, Zap, Save } from 'lucide-react';
 
 export default function ControlTab() {
   const [status, setStatus] = useState<DeviceStatus | null>(null);
@@ -10,7 +10,9 @@ export default function ControlTab() {
   const [contrast, setContrast] = useState(4);
   const [enhancement, setEnhancement] = useState(4);
   const [zoom, setZoom] = useState(10);
-  const [palette, setPalette] = useState<PaletteIndex>(0);
+  // '' = palette unknown (the P6 camera doesn't report its current palette, so
+  // we don't guess "White Hot" — the selector stays empty until the user picks).
+  const [palette, setPalette] = useState<PaletteIndex | ''>('');
 
   useEffect(() => {
     const unsubscribe = bleService.onStatusUpdate((newStatus) => {
@@ -21,7 +23,8 @@ export default function ControlTab() {
       if (newStatus.brightness !== undefined) setBrightness(newStatus.brightness);
       if (newStatus.contrast !== undefined) setContrast(newStatus.contrast);
       if (newStatus.enhancement !== undefined) setEnhancement(newStatus.enhancement);
-      if (newStatus.palette !== undefined) setPalette(newStatus.palette);
+      // Intentionally NOT syncing palette from device status: the camera's real
+      // palette is unknown, so keep the selector empty until the user sets it.
     });
     return unsubscribe;
   }, []);
@@ -116,6 +119,15 @@ export default function ControlTab() {
 
   return (
     <div className="space-y-6 pb-24">
+      {/* Save to Camera — persist current settings to the camera core */}
+      <button
+        onClick={() => run(bleService.saveToCamera())}
+        className="w-full py-4 bg-blue-600 hover:bg-blue-500 rounded-xl font-bold text-white flex items-center justify-center gap-2 transition-colors shadow-lg shadow-blue-900/20"
+      >
+        <Save className="w-5 h-5" />
+        Save to Camera
+      </button>
+
       {/* Profiles */}
       <div className="space-y-3">
         <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest ml-1">Quick Profiles</h3>
@@ -149,6 +161,9 @@ export default function ControlTab() {
             }}
             className="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 text-slate-300 appearance-none focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all cursor-pointer"
           >
+            <option value="" disabled>
+              Select palette…
+            </option>
             {(Object.entries(PALETTE_NAMES) as [string, string][]).map(([idx, name]) => (
               <option key={idx} value={idx} className="bg-slate-900 text-slate-300">
                 {name} (ID: {idx})

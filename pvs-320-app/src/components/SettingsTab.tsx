@@ -162,12 +162,6 @@ export default function SettingsTab() {
           >
             Dead Pixel Correction
           </button>
-          <button
-            onClick={() => run(bleService.saveToCamera())}
-            className="py-4 bg-slate-900 border border-slate-800 rounded-xl font-semibold text-slate-300 hover:bg-slate-800 transition-all"
-          >
-            Save to Camera
-          </button>
         </div>
         <p className="text-[10px] text-slate-500 ml-1">
           Dead Pixel Correction runs a ~3s calibration and permanently saves it to the camera core.
