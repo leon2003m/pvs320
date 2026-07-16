@@ -5,7 +5,7 @@ import AuthScreen from './screens/AuthScreen';
 import ControlTab from './components/ControlTab';
 import SettingsTab from './components/SettingsTab';
 import DebugConsole from './components/DebugConsole';
-import { Sliders, Settings, Info } from 'lucide-react';
+import { Sliders, Settings, Info, AlertTriangle, LogOut } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 export default function App() {
@@ -13,6 +13,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'control' | 'settings'>('control');
   const [showToast, setShowToast] = useState(false);
   const [toastMsg, setToastMsg] = useState('');
+  const [toastIsError, setToastIsError] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
   const [headerClicks, setHeaderClicks] = useState(0);
   const shownAuthToast = React.useRef<string | null>(null);
@@ -42,6 +43,7 @@ export default function App() {
       if (isSuccessMsg) shownAuthToast.current = msg;
 
       setToastMsg(msg);
+      setToastIsError(!!newStatus?.lastErrorMessage);
       setShowToast(true);
       const timer = setTimeout(() => setShowToast(false), 3000);
       return () => clearTimeout(timer);
@@ -75,6 +77,14 @@ export default function App() {
             <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Live Link Active</span>
           </div>
         </div>
+        <button
+          onClick={() => { void bleService.disconnect(); }}
+          aria-label="Log out and disconnect"
+          className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-900 border border-slate-800 text-slate-300 hover:bg-red-600 hover:text-white hover:border-red-500 transition-colors text-xs font-semibold"
+        >
+          <LogOut className="w-4 h-4" />
+          Logout
+        </button>
       </header>
 
       {/* Main Content */}
@@ -101,8 +111,8 @@ export default function App() {
             exit={{ opacity: 0, y: 20 }}
             className="absolute bottom-24 left-6 right-6 z-50"
           >
-            <div className="bg-blue-600 text-white px-4 py-3 rounded-xl shadow-xl flex items-center gap-3 border border-blue-400/30">
-              <Info className="w-5 h-5 flex-shrink-0" />
+            <div className={`text-white px-4 py-3 rounded-xl shadow-xl flex items-center gap-3 border ${toastIsError ? 'bg-red-600 border-red-400/30' : 'bg-blue-600 border-blue-400/30'}`}>
+              {toastIsError ? <AlertTriangle className="w-5 h-5 flex-shrink-0" /> : <Info className="w-5 h-5 flex-shrink-0" />}
               <p className="text-sm font-medium">{toastMsg}</p>
             </div>
           </motion.div>

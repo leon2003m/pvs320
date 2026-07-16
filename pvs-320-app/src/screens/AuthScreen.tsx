@@ -9,6 +9,7 @@ export default function AuthScreen({ onShowDebug }: { onShowDebug?: () => void }
   const [state, setState] = useState<ConnectionState>('disconnected');
   const [status, setStatus] = useState<DeviceStatus | null>(null);
   const [password, setPassword] = useState('');
+  const [remember, setRemember] = useState(true);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [isMock, setIsMock] = useState(bleService.isMock);
   const [logoClicks, setLogoClicks] = useState(0);
@@ -36,6 +37,15 @@ export default function AuthScreen({ onShowDebug }: { onShowDebug?: () => void }
     return unsubscribe;
   }, []);
 
+  // Prefill the saved password for this camera once connected (auto-login may
+  // already have handled it; this covers the suppressed/failed-auto cases).
+  useEffect(() => {
+    if (state === 'connected' && !status?.authenticated) {
+      const saved = bleService.getSavedPassword(bleService.getConnectedDeviceKey());
+      if (saved) setPassword(saved);
+    }
+  }, [state, status?.authenticated]);
+
   const toggleMock = () => {
     const next = !isMock;
     setIsMock(next);
@@ -60,7 +70,7 @@ export default function AuthScreen({ onShowDebug }: { onShowDebug?: () => void }
       if (status) {
         setStatus({ ...status, lastErrorMessage: '', lastErrorCode: '', lastResponse: '' });
       }
-      await bleService.login(password);
+      await bleService.login(password, remember);
     } catch (error) {
       console.error("Auth send failed:", error);
       setIsAuthenticating(false);
@@ -132,13 +142,21 @@ export default function AuthScreen({ onShowDebug }: { onShowDebug?: () => void }
           )}
 
           {state === 'disconnected' && (
-            <button
-              onClick={handleConnect}
-              className="w-full py-4 bg-blue-600 hover:bg-blue-500 transition-colors rounded-xl font-semibold flex items-center justify-center gap-2"
-            >
-              <Bluetooth className="w-5 h-5" />
-              Scan & Connect
-            </button>
+            <div className="space-y-4">
+              {status?.lastErrorMessage && (
+                <div className="flex items-center gap-2 justify-center p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-sm font-medium text-amber-400">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{status.lastErrorMessage}</span>
+                </div>
+              )}
+              <button
+                onClick={handleConnect}
+                className="w-full py-4 bg-blue-600 hover:bg-blue-500 transition-colors rounded-xl font-semibold flex items-center justify-center gap-2"
+              >
+                <Bluetooth className="w-5 h-5" />
+                Scan & Connect
+              </button>
+            </div>
           )}
 
           {(state === 'scanning' || state === 'connecting') && (
@@ -151,28 +169,40 @@ export default function AuthScreen({ onShowDebug }: { onShowDebug?: () => void }
           )}
 
           {state === 'connected' && !status?.authenticated && (
-            <div className="space-y-4">
+            <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); handleAuth(); }}>
               <div className="flex items-center gap-2 text-green-500 justify-center mb-2">
                 <ShieldCheck className="w-5 h-5" />
                 <span className="font-medium text-sm uppercase tracking-wider">Connected</span>
               </div>
-              
+
               <div className="space-y-2 text-left">
-                <label className="text-xs font-semibold text-slate-500 uppercase ml-1">Device Password</label>
+                <label htmlFor="device-password" className="text-xs font-semibold text-slate-500 uppercase ml-1">Device Password</label>
                 <div className="relative">
                   <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500" />
                   <input
+                    id="device-password"
                     type="password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder="Enter password"
+                    autoFocus
                     className="w-full bg-slate-800 border border-slate-700 rounded-xl py-4 pl-12 pr-4 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
                   />
                 </div>
               </div>
 
+              <label className="flex items-center gap-2 text-left text-sm text-slate-400 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={remember}
+                  onChange={(e) => setRemember(e.target.checked)}
+                  className="w-4 h-4 accent-blue-500"
+                />
+                Remember this camera on this device
+              </label>
+
               <button
-                onClick={handleAuth}
+                type="submit"
                 disabled={isAuthenticating}
                 className={`w-full py-4 transition-all rounded-xl font-semibold ${
                   isError
@@ -197,7 +227,7 @@ export default function AuthScreen({ onShowDebug }: { onShowDebug?: () => void }
                   <span>{errorMessage}</span>
                 </motion.div>
               )}
-            </div>
+            </form>
           )}
 
           {state === 'error' && (
@@ -217,7 +247,7 @@ export default function AuthScreen({ onShowDebug }: { onShowDebug?: () => void }
         </div>
 
         <div className="text-slate-600 text-xs">
-          <p>Service: {bleService.state.toUpperCase()}</p>
+          <p>Status: {bleService.state.charAt(0).toUpperCase() + bleService.state.slice(1)}</p>
         </div>
 
         {state === 'error' && (

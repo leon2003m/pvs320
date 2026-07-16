@@ -39,7 +39,7 @@ export default function BLETest() {
     <div className="p-6 bg-slate-900 rounded-2xl border border-slate-800 space-y-4">
       <div className="flex items-center gap-3">
         <Bluetooth className={`w-6 h-6 ${support.available ? 'text-green-500' : 'text-amber-500'}`} />
-        <h2 className="text-lg font-bold text-white">IDE BLE Support Test</h2>
+        <h2 className="text-lg font-bold text-white">Bluetooth Support Check</h2>
       </div>
 
       <div className="space-y-3">

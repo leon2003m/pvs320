@@ -1,4 +1,6 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap');
+/* No runtime web-font request: the app stays fully self-contained so the
+   registered service worker works offline. Inter/JetBrains Mono are used if
+   installed locally; otherwise the system stack below applies. */
 @import "tailwindcss";
 
 @theme {

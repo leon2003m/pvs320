@@ -1,25 +1,34 @@
 import React, { useState, useEffect } from 'react';
 import { bleService } from '../services/bleService';
-import { DeviceStatus, PALETTE_NAMES, PaletteIndex } from '../types';
-import { Settings, RefreshCw, Cpu, Info, Save, Wifi, Clock } from 'lucide-react';
+import { DeviceStatus } from '../types';
+import { RefreshCw, Cpu, Info, Save, Wifi, Clock, Loader2 } from 'lucide-react';
 
 export default function SettingsTab() {
   const [status, setStatus] = useState<DeviceStatus | null>(null);
   const [autoNuc, setAutoNuc] = useState(false);
   const [otaPendingTarget, setOtaPendingTarget] = useState<boolean | null>(null);
+  const [otaRemaining, setOtaRemaining] = useState(0);
+  const [busy, setBusy] = useState<string | null>(null);
   const otaPendingTargetRef = React.useRef<boolean | null>(null);
   const bleNameTouchedRef = React.useRef(false);
-  
-  // Profile Editor State
+
+  // Profile Editor State (palette is intentionally omitted: firmware ties a
+  // profile's palette to its index, so it isn't independently storable.)
   const [editProfile, setEditProfile] = useState(0);
   const [editBrightness, setEditBrightness] = useState<number | "">(128);
   const [editContrast, setEditContrast] = useState<number | "">(4);
   const [editEnhancement, setEditEnhancement] = useState<number | "">(4);
-  const [editPalette, setEditPalette] = useState<PaletteIndex>(0);
 
-  // Password Change State
+  // Password / BLE name State
   const [newPassword, setNewPassword] = useState('');
   const [newBleName, setNewBleName] = useState('');
+
+  // Seed the Auto-NUC toggle from the last value set for THIS camera (the
+  // camera can't report its live auto-cal state, so this is a local memory).
+  useEffect(() => {
+    const key = bleService.getConnectedDeviceKey();
+    setAutoNuc(bleService.getDevicePref<boolean>(key, 'autoNuc', false));
+  }, []);
 
   useEffect(() => {
     otaPendingTargetRef.current = otaPendingTarget;
@@ -31,57 +40,71 @@ export default function SettingsTab() {
       if (otaPendingTargetRef.current !== null && !!newStatus.otaActive === otaPendingTargetRef.current) {
         setOtaPendingTarget(null);
       }
-      
-      // Sync local state with device status if fields are present
-      if (newStatus.brightness !== undefined) setEditBrightness(newStatus.brightness);
-      if (newStatus.contrast !== undefined) setEditContrast(newStatus.contrast);
-      if (newStatus.enhancement !== undefined) setEditEnhancement(newStatus.enhancement);
-      if (newStatus.palette !== undefined) setEditPalette(newStatus.palette);
+      // NOTE: Profile Editor fields are NOT synced from live status — they
+      // represent the profile being edited and are only loaded via getProfile.
       if (newStatus.bleName !== undefined && !bleNameTouchedRef.current) setNewBleName(newStatus.bleName);
     });
     return unsubscribe;
   }, []);
 
+  // OTA countdown: reset from device value, then tick locally each second.
+  useEffect(() => {
+    setOtaRemaining(status?.otaRemainingMs ?? 0);
+  }, [status?.otaRemainingMs, status?.otaActive]);
+
+  useEffect(() => {
+    if (!status?.otaActive) return;
+    const id = window.setInterval(() => setOtaRemaining((r) => Math.max(0, r - 1000)), 1000);
+    return () => window.clearInterval(id);
+  }, [status?.otaActive]);
+
   useEffect(() => {
     if (otaPendingTarget === null) return;
-
-    const timer = window.setTimeout(() => {
-      setOtaPendingTarget(null);
-    }, 2500);
-
+    const timer = window.setTimeout(() => setOtaPendingTarget(null), 2500);
     return () => window.clearTimeout(timer);
   }, [otaPendingTarget]);
 
-  const run = (promise: Promise<unknown>) => {
-    void promise.catch((error) => {
-      if (otaPendingTarget !== null) {
-        setOtaPendingTarget(null);
-      }
-      const message = error instanceof Error ? error.message : String(error);
-      bleService.setLocalStatusMessage(message, 'error');
-    });
+  const fail = (error: unknown) => {
+    if (otaPendingTargetRef.current !== null) setOtaPendingTarget(null);
+    const message = error instanceof Error ? error.message : String(error);
+    bleService.setLocalStatusMessage(message, 'error');
   };
 
-  const handleProfileSwitch = async (p: number) => {
+  const run = (promise: Promise<unknown>) => {
+    void promise.catch(fail);
+  };
+
+  // Runs an action while showing a spinner / disabling its button.
+  const runBusy = (name: string, promise: Promise<unknown>) => {
+    setBusy(name);
+    void promise.catch(fail).finally(() => setBusy(null));
+  };
+
+  const handleProfileSwitch = (p: number) => {
     setEditProfile(p);
     run((async () => {
       const profile = await bleService.getProfile(p);
       setEditBrightness(profile.brightness);
       setEditContrast(profile.contrast);
       setEditEnhancement(profile.enhancement);
-      setEditPalette(profile.palette);
     })());
   };
 
   const handleAutoNucToggle = () => {
-    const newState = !autoNuc;
-    setAutoNuc(newState);
-    run(bleService.setAutoCalibration(newState));
+    const next = !autoNuc;
+    setAutoNuc(next);
+    const key = bleService.getConnectedDeviceKey();
+    void bleService.setAutoCalibration(next)
+      .then(() => bleService.setDevicePref(key, 'autoNuc', next))
+      .catch((error) => {
+        setAutoNuc(!next); // roll back the toggle
+        fail(error);
+      });
   };
 
   const handleSaveProfile = () => {
     if (editBrightness === "" || editContrast === "" || editEnhancement === "") return;
-    run(bleService.saveProfile(editProfile, editBrightness, editContrast, editEnhancement));
+    runBusy('save-profile', bleService.saveProfile(editProfile, editBrightness, editContrast, editEnhancement));
   };
 
   const handleChangePassword = () => {
@@ -109,20 +132,20 @@ export default function SettingsTab() {
   const handleOtaToggle = () => {
     const nextState = !(otaPendingTarget ?? status?.otaActive ?? false);
     setOtaPendingTarget(nextState);
-
     if (status?.otaActive) {
       run(bleService.stopOta());
       return;
     }
-
     run(bleService.startOta());
   };
 
   const otaEnabled = otaPendingTarget ?? status?.otaActive ?? false;
 
+  const calButtonClass = "py-4 bg-slate-900 border border-slate-800 rounded-xl font-semibold text-slate-300 hover:bg-slate-800 transition-all disabled:opacity-50 flex items-center justify-center gap-2";
+
   return (
     <div className="space-y-8 pb-24">
-      {/* Auto NUCing */}
+      {/* Calibration */}
       <section className="space-y-3">
         <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest ml-1">Calibration</h3>
         <div className="bg-slate-900/50 border border-slate-800 rounded-2xl p-4 flex items-center justify-between">
@@ -132,10 +155,14 @@ export default function SettingsTab() {
             </div>
             <div>
               <p className="font-semibold text-slate-200">Auto NUCing Toggle</p>
-              <p className="text-xs text-slate-500">Automatic Non-Uniformity Correction</p>
+              <p className="text-xs text-slate-500">Automatic Non-Uniformity Correction (shows last set from this app)</p>
             </div>
           </div>
-          <button 
+          <button
+            type="button"
+            role="switch"
+            aria-checked={autoNuc ? 'true' : 'false'}
+            aria-label="Toggle automatic NUC"
             onClick={handleAutoNucToggle}
             className={`w-14 h-8 rounded-full transition-colors relative ${autoNuc ? 'bg-blue-600' : 'bg-slate-700'}`}
           >
@@ -145,44 +172,51 @@ export default function SettingsTab() {
 
         <div className="grid grid-cols-2 gap-3">
           <button
-            onClick={() => run(bleService.runScreenAdjust())}
-            className="py-4 bg-slate-900 border border-slate-800 rounded-xl font-semibold text-slate-300 hover:bg-slate-800 transition-all"
+            onClick={() => runBusy('screen', bleService.runScreenAdjust())}
+            disabled={busy !== null}
+            className={calButtonClass}
           >
-            Sceen Adjust
+            {busy === 'screen' && <Loader2 className="w-4 h-4 animate-spin" />}
+            Screen Adjust
           </button>
           <button
-            onClick={() => run(bleService.runManualCalibration())}
-            className="py-4 bg-slate-900 border border-slate-800 rounded-xl font-semibold text-slate-300 hover:bg-slate-800 transition-all"
+            onClick={() => runBusy('manual', bleService.runManualCalibration())}
+            disabled={busy !== null}
+            className={calButtonClass}
           >
+            {busy === 'manual' && <Loader2 className="w-4 h-4 animate-spin" />}
             Manual Adjust
           </button>
           <button
-            onClick={() => run(bleService.runDpc())}
-            className="py-4 bg-slate-900 border border-slate-800 rounded-xl font-semibold text-slate-300 hover:bg-slate-800 transition-all"
+            onClick={() => runBusy('dpc', bleService.runDpc())}
+            disabled={busy !== null}
+            className={`${calButtonClass} col-span-2`}
           >
+            {busy === 'dpc' && <Loader2 className="w-4 h-4 animate-spin" />}
             Dead Pixel Correction
           </button>
         </div>
-        <p className="text-[10px] text-slate-500 ml-1">
+        <p className="text-[11px] text-slate-500 ml-1">
           Dead Pixel Correction runs a ~3s calibration and permanently saves it to the camera core.
         </p>
       </section>
 
       {/* Security Section */}
       <section className="space-y-3">
-        <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest ml-1">Security & Device</h3>
+        <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest ml-1">Security &amp; Device</h3>
         <div className="bg-slate-900/50 border border-slate-800 rounded-2xl p-5 space-y-6">
           <div className="space-y-2">
-            <label className="text-xs font-bold text-slate-500 uppercase">Change Device Password</label>
+            <label htmlFor="change-password" className="text-xs font-bold text-slate-500 uppercase">Change Device Password</label>
             <div className="flex gap-2 items-center">
-              <input 
-                type="password" 
+              <input
+                id="change-password"
+                type="password"
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
                 placeholder="New password"
                 className="flex-1 min-w-0 bg-slate-800 border border-slate-700 rounded-lg p-2 text-slate-200 focus:outline-none focus:border-blue-500"
               />
-              <button 
+              <button
                 onClick={handleChangePassword}
                 className="flex-shrink-0 px-4 py-2 bg-slate-800 hover:bg-blue-600 border border-slate-700 rounded-lg font-bold text-slate-200 transition-all"
               >
@@ -192,10 +226,11 @@ export default function SettingsTab() {
           </div>
 
           <div className="space-y-2">
-            <label className="text-xs font-bold text-slate-500 uppercase">Change BLE Name</label>
+            <label htmlFor="change-ble-name" className="text-xs font-bold text-slate-500 uppercase">Change BLE Name</label>
             <div className="flex gap-2 items-center">
-              <input 
-                type="text" 
+              <input
+                id="change-ble-name"
+                type="text"
                 value={newBleName}
                 onChange={(e) => {
                   bleNameTouchedRef.current = true;
@@ -205,14 +240,14 @@ export default function SettingsTab() {
                 maxLength={20}
                 className="flex-1 min-w-0 bg-slate-800 border border-slate-700 rounded-lg p-2 text-slate-200 focus:outline-none focus:border-blue-500"
               />
-              <button 
+              <button
                 onClick={handleChangeBleName}
                 className="flex-shrink-0 px-4 py-2 bg-slate-800 hover:bg-blue-600 border border-slate-700 rounded-lg font-bold text-slate-200 transition-all"
               >
                 Set
               </button>
             </div>
-            <p className="text-[10px] text-slate-500">1-20 characters. Device will update advertising immediately.</p>
+            <p className="text-[11px] text-slate-500">1-20 characters. Device will update advertising immediately.</p>
           </div>
         </div>
       </section>
@@ -255,7 +290,7 @@ export default function SettingsTab() {
                 </div>
                 <div className="flex items-center gap-1 text-slate-400 font-mono text-sm">
                   <Clock className="w-4 h-4" />
-                  {Math.ceil(status.otaRemainingMs / 1000)}s
+                  {Math.ceil(otaRemaining / 1000)}s
                 </div>
               </div>
 
@@ -283,7 +318,7 @@ export default function SettingsTab() {
         <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest ml-1">Profile Editor</h3>
         <div className="bg-slate-900/50 border border-slate-800 rounded-2xl p-5 space-y-6">
           <div className="space-y-2">
-            <label className="text-xs font-bold text-slate-500 uppercase">Select Profile</label>
+            <span className="text-xs font-bold text-slate-500 uppercase">Select Profile</span>
             <div className="grid grid-cols-5 gap-2">
               {[0, 1, 2, 3, 4].map(p => (
                 <button
@@ -295,55 +330,48 @@ export default function SettingsTab() {
                 </button>
               ))}
             </div>
+            <p className="text-[11px] text-slate-500">Each profile applies its matching palette (P{editProfile} → palette {editProfile}).</p>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-3 gap-4">
             <div className="space-y-1">
-              <label className="text-[10px] font-bold text-slate-500 uppercase">Brightness (0-255)</label>
-              <input 
-                type="number" 
+              <label htmlFor="edit-brightness" className="text-[11px] font-bold text-slate-500 uppercase">Brightness (0-255)</label>
+              <input
+                id="edit-brightness"
+                type="number"
                 value={editBrightness}
                 onChange={(e) => handleNumericInput(e.target.value, 255, setEditBrightness)}
                 className="w-full bg-slate-800 border border-slate-700 rounded-lg p-2 text-slate-200 focus:outline-none focus:border-blue-500"
               />
             </div>
             <div className="space-y-1">
-              <label className="text-[10px] font-bold text-slate-500 uppercase">Contrast (0-7)</label>
-              <input 
-                type="number" 
+              <label htmlFor="edit-contrast" className="text-[11px] font-bold text-slate-500 uppercase">Contrast (0-7)</label>
+              <input
+                id="edit-contrast"
+                type="number"
                 value={editContrast}
                 onChange={(e) => handleNumericInput(e.target.value, 7, setEditContrast)}
                 className="w-full bg-slate-800 border border-slate-700 rounded-lg p-2 text-slate-200 focus:outline-none focus:border-blue-500"
               />
             </div>
             <div className="space-y-1">
-              <label className="text-[10px] font-bold text-slate-500 uppercase">Enhance (0-7)</label>
-              <input 
-                type="number" 
+              <label htmlFor="edit-enhancement" className="text-[11px] font-bold text-slate-500 uppercase">Enhancement (0-7)</label>
+              <input
+                id="edit-enhancement"
+                type="number"
                 value={editEnhancement}
                 onChange={(e) => handleNumericInput(e.target.value, 7, setEditEnhancement)}
                 className="w-full bg-slate-800 border border-slate-700 rounded-lg p-2 text-slate-200 focus:outline-none focus:border-blue-500"
               />
             </div>
-            <div className="space-y-1">
-              <label className="text-[10px] font-bold text-slate-500 uppercase">Palette (0-4)</label>
-              <select 
-                value={editPalette}
-                onChange={(e) => setEditPalette(parseInt(e.target.value) as PaletteIndex)}
-                className="w-full bg-slate-800 border border-slate-700 rounded-lg p-2 text-slate-200 focus:outline-none focus:border-blue-500"
-              >
-                {Object.entries(PALETTE_NAMES).map(([idx, name]) => (
-                  <option key={idx} value={idx}>{name}</option>
-                ))}
-              </select>
-            </div>
           </div>
 
-          <button 
+          <button
             onClick={handleSaveProfile}
-            className="w-full py-4 bg-blue-600 hover:bg-blue-500 rounded-xl font-bold text-white flex items-center justify-center gap-2 transition-colors shadow-lg shadow-blue-900/20"
+            disabled={busy === 'save-profile'}
+            className="w-full py-4 bg-blue-600 hover:bg-blue-500 rounded-xl font-bold text-white flex items-center justify-center gap-2 transition-colors shadow-lg shadow-blue-900/20 disabled:opacity-50"
           >
-            <Save className="w-5 h-5" />
+            {busy === 'save-profile' ? <Loader2 className="w-5 h-5 animate-spin" /> : <Save className="w-5 h-5" />}
             Save Profile {editProfile}
           </button>
         </div>

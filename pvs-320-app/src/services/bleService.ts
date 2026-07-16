@@ -25,6 +25,13 @@ export interface BLELog {
 const SERVER_LOG_ENDPOINT = '/__logs/ble';
 const MIN_ACCEPTABLE_RSSI = -85;
 const SERVER_LOGGING_KEY = 'ble_server_logging_enabled';
+const SAVED_PASSWORDS_KEY = 'ble_saved_passwords';
+const DEVICE_PREFS_KEY = 'ble_device_prefs';
+
+interface SavedPasswordEntry {
+  password: string;
+  name?: string;
+}
 
 type PendingRequest = {
   resolve: (value: any) => void;
@@ -54,7 +61,14 @@ export interface BLEService {
   setMock: (mock: boolean) => void;
   scanAndConnect: () => Promise<void>;
   disconnect: () => Promise<void>;
-  login: (password: string) => Promise<void>;
+  login: (password: string, remember?: boolean) => Promise<void>;
+  tryAutoLogin: () => Promise<boolean>;
+  getConnectedDeviceKey: () => string | null;
+  getSavedPassword: (key: string | null) => string | null;
+  savePassword: (key: string | null, password: string, name?: string) => void;
+  forgetSavedPassword: (key: string | null) => void;
+  getDevicePref: <T>(key: string | null, name: string, fallback: T) => T;
+  setDevicePref: (key: string | null, name: string, value: unknown) => void;
   getState: () => Promise<DeviceStatus>;
   getCapabilities: () => Promise<ProtocolMetadata | null>;
   refreshDeviceInfo: () => Promise<void>;
@@ -102,7 +116,9 @@ class ThermalBLEService implements BLEService {
   private pendingRequests = new Map<string, PendingRequest>();
   private writeChain: Promise<void> = Promise.resolve();
   private requestCounter = 0;
-  private lastStateSeq = 0;
+  private lastStateSeq = -1;
+  private connectedDeviceKey: string | null = null;
+  private autoLoginSuppressed = false;
   private rpcBuffer = '';
   private stateBuffer = '';
   private logBuffer = '';
@@ -291,7 +307,10 @@ class ThermalBLEService implements BLEService {
   }
 
   private applyState(nextState: DeviceStatus) {
-    this.status = { ...DEFAULT_STATUS, ...nextState };
+    // Merge onto the PREVIOUS status, not DEFAULT_STATUS: a partial state frame
+    // from firmware must not silently reset authenticated/otaActive/etc.
+    const base = this.status ?? DEFAULT_STATUS;
+    this.status = { ...base, ...nextState };
     this.notifyStatus();
   }
 
@@ -314,6 +333,80 @@ class ThermalBLEService implements BLEService {
 
   private setStoredDeviceName(name: string) {
     localStorage.setItem('ble_device_name', name);
+  }
+
+  // ---- Per-device credential + preference storage (localStorage) ----
+
+  getConnectedDeviceKey(): string | null {
+    if (this.connectedDeviceKey) return this.connectedDeviceKey;
+    const name = this.status?.bleName;
+    return name ? `name:${name}` : null;
+  }
+
+  private readSavedPasswords(): Record<string, SavedPasswordEntry> {
+    try {
+      return JSON.parse(localStorage.getItem(SAVED_PASSWORDS_KEY) || '{}');
+    } catch {
+      return {};
+    }
+  }
+
+  getSavedPassword(key: string | null): string | null {
+    if (!key) return null;
+    return this.readSavedPasswords()[key]?.password ?? null;
+  }
+
+  savePassword(key: string | null, password: string, name?: string) {
+    if (!key) return;
+    const all = this.readSavedPasswords();
+    all[key] = { password, name };
+    localStorage.setItem(SAVED_PASSWORDS_KEY, JSON.stringify(all));
+  }
+
+  forgetSavedPassword(key: string | null) {
+    if (!key) return;
+    const all = this.readSavedPasswords();
+    if (all[key]) {
+      delete all[key];
+      localStorage.setItem(SAVED_PASSWORDS_KEY, JSON.stringify(all));
+    }
+  }
+
+  private readDevicePrefs(): Record<string, Record<string, unknown>> {
+    try {
+      return JSON.parse(localStorage.getItem(DEVICE_PREFS_KEY) || '{}');
+    } catch {
+      return {};
+    }
+  }
+
+  getDevicePref<T>(key: string | null, name: string, fallback: T): T {
+    if (!key) return fallback;
+    const value = this.readDevicePrefs()[key]?.[name];
+    return value === undefined ? fallback : (value as T);
+  }
+
+  setDevicePref(key: string | null, name: string, value: unknown) {
+    if (!key) return;
+    const all = this.readDevicePrefs();
+    all[key] = { ...(all[key] || {}), [name]: value };
+    localStorage.setItem(DEVICE_PREFS_KEY, JSON.stringify(all));
+  }
+
+  async tryAutoLogin(): Promise<boolean> {
+    if (this.autoLoginSuppressed) return false;
+    if (this.status?.authenticated) return false;
+    const key = this.getConnectedDeviceKey();
+    const saved = this.getSavedPassword(key);
+    if (!saved) return false;
+    try {
+      await this.login(saved, true);
+      return true;
+    } catch {
+      // Stored password no longer works (e.g. changed on the device) — forget it.
+      this.forgetSavedPassword(key);
+      return false;
+    }
   }
 
   private readText(value: DataView | null | undefined) {
@@ -578,8 +671,10 @@ class ThermalBLEService implements BLEService {
   async scanAndConnect() {
     if (this.isMock) {
       this.protocol = this.mockProtocol;
+      this.connectedDeviceKey = null; // mock uses the name-based fallback key
       this.applyState({ ...this.mockStatus, authenticated: false, authStatus: 'required' });
       this.setState('connected');
+      await this.tryAutoLogin().catch(() => {});
       return;
     }
 
@@ -600,6 +695,8 @@ class ThermalBLEService implements BLEService {
       });
 
       this.addLog('info', `Found device: ${this.device.name || DEVICE_NAME}`);
+      // device.id is Web Bluetooth's stable per-origin identifier (MAC is hidden).
+      this.connectedDeviceKey = this.device?.id ? `id:${this.device.id}` : null;
       await this.validateSignalStrength(this.device);
       this.setState('connecting');
 
@@ -634,10 +731,12 @@ class ThermalBLEService implements BLEService {
         }
       }
 
-      this.lastStateSeq = 0;
+      this.lastStateSeq = -1;
       this.status = { ...DEFAULT_STATUS, authStatus: 'required' };
       await this.readCurrentState();
       this.setState('connected');
+      // Auto-login if this camera has a saved password (unless suppressed by logout).
+      await this.tryAutoLogin().catch(() => {});
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.addLog('error', `Connection failed: ${message}`);
@@ -670,11 +769,24 @@ class ThermalBLEService implements BLEService {
   };
 
   async disconnect() {
+    // Explicit logout: don't immediately auto-login again on the next connect.
+    this.autoLoginSuppressed = true;
     this.rejectPendingRequests(new BLEProtocolError('disconnected', 'Disconnected by user'));
-    if (this.device?.gatt?.connected) {
-      this.device.gatt.disconnect();
+    if (this.device) {
+      this.device.removeEventListener('gattserverdisconnected', this.handleDisconnected);
+      if (this.device.gatt?.connected) {
+        this.device.gatt.disconnect();
+      }
     }
+    // Fully release handles so a later reconnect doesn't reuse stale ones.
     this.protocol = null;
+    this.protocolChar = null;
+    this.rpcChar = null;
+    this.stateChar = null;
+    this.logChar = null;
+    this.server = null;
+    this.device = null;
+    this.connectedDeviceKey = null;
     this.status = {
       ...DEFAULT_STATUS,
       lastErrorCode: '',
@@ -751,16 +863,34 @@ class ThermalBLEService implements BLEService {
     });
   }
 
-  async login(password: string) {
+  async login(password: string, remember = false) {
     const result = await this.request<{
       authenticated?: boolean;
       identityRefreshed?: boolean;
       warning?: string;
     }>('auth.login', { password });
 
+    // An `ok` response that reports authenticated:false is a failure, not success.
+    if (result?.authenticated === false) {
+      this.status = {
+        ...(this.status || DEFAULT_STATUS),
+        authenticated: false,
+        authStatus: 'required',
+        lastErrorCode: 'auth_unconfirmed',
+        lastErrorMessage: 'Authentication was not confirmed by the device.',
+      };
+      this.notifyStatus();
+      throw new BLEProtocolError('auth_unconfirmed', 'Authentication was not confirmed by the device.');
+    }
+
+    this.autoLoginSuppressed = false;
+    if (remember) {
+      this.savePassword(this.getConnectedDeviceKey(), password, this.status?.bleName);
+    }
+
     this.status = {
       ...(this.status || DEFAULT_STATUS),
-      authenticated: result?.authenticated ?? true,
+      authenticated: true,
       authStatus: 'confirmed',
       lastResponse: result?.warning || 'Authenticated',
       lastErrorCode: '',
@@ -799,6 +929,9 @@ class ThermalBLEService implements BLEService {
 
   async setPassword(password: string) {
     await this.request('device.setPassword', { password }, 4000);
+    // The saved password for this camera is now stale — drop it so auto-login
+    // doesn't keep trying the old one.
+    this.forgetSavedPassword(this.getConnectedDeviceKey());
     this.status = {
       ...(this.status || DEFAULT_STATUS),
       authenticated: false,
@@ -847,11 +980,12 @@ class ThermalBLEService implements BLEService {
   }
 
   async runManualCalibration() {
-    await this.request('calibration.manual');
+    // Real shutter NUC can take a few seconds — don't use the 2.5s default.
+    await this.request('calibration.manual', {}, 6000);
   }
 
   async runScreenAdjust() {
-    await this.request('calibration.screenAdjust');
+    await this.request('calibration.screenAdjust', {}, 6000);
   }
 
   async runDpc() {
