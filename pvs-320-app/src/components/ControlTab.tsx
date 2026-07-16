@@ -81,10 +81,11 @@ function SliderGroup({ label, value, min, max, onChange, onRelease, icon: Icon }
   );
 }
 
-// Sends at most one command per `intervalMs` while a value is changing, and
+// Sends at most one command per throttle interval while a value is changing, and
 // always delivers the final value. This gives smooth live updates during a drag
 // AND guarantees the last value lands even if the release event is missed.
-function makeThrottledSender(send: (v: number) => Promise<void>, intervalMs = 120) {
+// `getInterval` is read live so the per-device throttle setting takes effect.
+function makeThrottledSender(send: (v: number) => Promise<void>, getInterval: () => number) {
   let lastSent = 0;
   let timer: number | null = null;
   let pending: number | null = null;
@@ -98,7 +99,7 @@ function makeThrottledSender(send: (v: number) => Promise<void>, intervalMs = 12
     // Called continuously during a drag — coalesced + rate-limited.
     push(v: number) {
       pending = v;
-      const wait = intervalMs - (Date.now() - lastSent);
+      const wait = getInterval() - (Date.now() - lastSent);
       if (wait <= 0) {
         if (timer !== null) { clearTimeout(timer); timer = null; }
         const val = pending; pending = null;
@@ -133,12 +134,19 @@ export default function ControlTab() {
   // Guards live-status sync while the user is actively dragging/typing a slider.
   const interactingRef = useRef(false);
 
+  // Per-device slider throttle (ms), read once when this tab mounts.
+  const throttleRef = useRef<number | null>(null);
+  if (throttleRef.current === null) {
+    throttleRef.current = bleService.getDevicePref<number>(bleService.getConnectedDeviceKey(), 'sliderThrottleMs', 120);
+  }
+  const getThrottle = () => throttleRef.current ?? 120;
+
   // One throttled sender per slider (stable across renders).
   const sendersRef = useRef({
-    brightness: makeThrottledSender((v) => bleService.setBrightness(v)),
-    contrast: makeThrottledSender((v) => bleService.setContrast(v)),
-    enhancement: makeThrottledSender((v) => bleService.setEnhancement(v)),
-    zoom: makeThrottledSender((v) => bleService.setZoom(v)),
+    brightness: makeThrottledSender((v) => bleService.setBrightness(v), getThrottle),
+    contrast: makeThrottledSender((v) => bleService.setContrast(v), getThrottle),
+    enhancement: makeThrottledSender((v) => bleService.setEnhancement(v), getThrottle),
+    zoom: makeThrottledSender((v) => bleService.setZoom(v), getThrottle),
   });
 
   useEffect(() => {

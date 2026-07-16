@@ -6,6 +6,7 @@ import { RefreshCw, Cpu, Info, Save, Wifi, Clock, Loader2 } from 'lucide-react';
 export default function SettingsTab() {
   const [status, setStatus] = useState<DeviceStatus | null>(null);
   const [autoNuc, setAutoNuc] = useState(false);
+  const [sliderThrottle, setSliderThrottle] = useState(120);
   const [otaPendingTarget, setOtaPendingTarget] = useState<boolean | null>(null);
   const [otaRemaining, setOtaRemaining] = useState(0);
   const [busy, setBusy] = useState<string | null>(null);
@@ -28,6 +29,7 @@ export default function SettingsTab() {
   useEffect(() => {
     const key = bleService.getConnectedDeviceKey();
     setAutoNuc(bleService.getDevicePref<boolean>(key, 'autoNuc', false));
+    setSliderThrottle(bleService.getDevicePref<number>(key, 'sliderThrottleMs', 120));
   }, []);
 
   useEffect(() => {
@@ -100,6 +102,11 @@ export default function SettingsTab() {
         setAutoNuc(!next); // roll back the toggle
         fail(error);
       });
+  };
+
+  const handleThrottleChange = (ms: number) => {
+    setSliderThrottle(ms);
+    bleService.setDevicePref(bleService.getConnectedDeviceKey(), 'sliderThrottleMs', ms);
   };
 
   const handleSaveProfile = () => {
@@ -199,6 +206,32 @@ export default function SettingsTab() {
         <p className="text-[11px] text-slate-500 ml-1">
           Dead Pixel Correction runs a ~3s calibration and permanently saves it to the camera core.
         </p>
+      </section>
+
+      {/* Slider Response */}
+      <section className="space-y-3">
+        <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest ml-1">Slider Response</h3>
+        <div className="bg-slate-900/50 border border-slate-800 rounded-2xl p-4 space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="font-semibold text-slate-200">Live update rate</p>
+              <p className="text-xs text-slate-500">How often sliders send while dragging. Lower = snappier; higher = gentler on a weak BLE link.</p>
+            </div>
+            <select
+              value={sliderThrottle}
+              onChange={(e) => handleThrottleChange(parseInt(e.target.value, 10))}
+              aria-label="Slider live update rate"
+              className="flex-shrink-0 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-sm focus:outline-none focus:border-blue-500"
+            >
+              <option value={60}>Fastest (60ms)</option>
+              <option value={90}>Fast (90ms)</option>
+              <option value={120}>Balanced (120ms)</option>
+              <option value={200}>Relaxed (200ms)</option>
+              <option value={300}>Weak link (300ms)</option>
+            </select>
+          </div>
+          <p className="text-[11px] text-slate-500">Saved per camera. The final value is always sent on release regardless of this setting.</p>
+        </div>
       </section>
 
       {/* Security Section */}
