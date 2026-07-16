@@ -748,8 +748,11 @@ class ThermalBLEService implements BLEService {
       this.status = { ...DEFAULT_STATUS, authStatus: 'required' };
       await this.readCurrentState();
       this.setState('connected');
-      // Auto-login if this camera has a saved password (unless suppressed by logout).
-      await this.tryAutoLogin().catch(() => {});
+      // Auto-login runs AFTER a settle delay and OFF the connect path. Writing to
+      // the ESP32-C3 the instant the GATT link comes up frequently trips a GATT
+      // error / disconnect, so we let the link stabilize and never block or
+      // destabilize the connection on auto-login.
+      window.setTimeout(() => { void this.tryAutoLogin().catch(() => {}); }, 800);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.addLog('error', `Connection failed: ${message}`);
