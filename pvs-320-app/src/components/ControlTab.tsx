@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { bleService } from '../services/bleService';
-import { DeviceStatus, PALETTE_NAMES, PaletteIndex } from '../types';
+import { PALETTE_NAMES, PaletteIndex } from '../types';
 import { Sliders, Maximize, Sun, Contrast, Zap, Save } from 'lucide-react';
 
 type SliderGroupProps = {
@@ -85,12 +85,18 @@ function SliderGroup({ label, value, min, max, onChange, onRelease, icon: Icon }
 // always delivers the final value. This gives smooth live updates during a drag
 // AND guarantees the last value lands even if the release event is missed.
 // `getInterval` is read live so the per-device throttle setting takes effect.
-function makeThrottledSender(send: (v: number) => Promise<void>, getInterval: () => number) {
+function makeThrottledSender(
+  send: (v: number) => Promise<void>,
+  getInterval: () => number,
+  onError?: (e: unknown) => void,
+) {
   let lastSent = 0;
   let timer: number | null = null;
   let pending: number | null = null;
 
-  const dispatch = (v: number, onError?: (e: unknown) => void) => {
+  // Every dispatch (live, trailing, and final flush) surfaces errors, so a
+  // failed send is never silent — including the trailing "missed release" send.
+  const dispatch = (v: number) => {
     lastSent = Date.now();
     void send(v).catch((e) => onError?.(e));
   };
@@ -112,16 +118,25 @@ function makeThrottledSender(send: (v: number) => Promise<void>, getInterval: ()
       }
     },
     // Called on release — cancels any pending throttle and sends immediately.
-    flush(v: number, onError?: (e: unknown) => void) {
+    flush(v: number) {
       if (timer !== null) { clearTimeout(timer); timer = null; }
       pending = null;
-      dispatch(v, onError);
+      dispatch(v);
+    },
+    // Called on unmount — drop any pending trailing timer so it can't fire late.
+    cancel() {
+      if (timer !== null) { clearTimeout(timer); timer = null; }
+      pending = null;
     },
   };
 }
 
+function reportError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  bleService.setLocalStatusMessage(message, 'error');
+}
+
 export default function ControlTab() {
-  const [, setStatus] = useState<DeviceStatus | null>(null);
   const [activeProfile, setActiveProfile] = useState(0);
   const [brightness, setBrightness] = useState(128);
   const [contrast, setContrast] = useState(4);
@@ -131,8 +146,10 @@ export default function ControlTab() {
   // we don't guess "White Hot" — the selector stays empty until the user picks).
   const [palette, setPalette] = useState<PaletteIndex | ''>('');
 
-  // Guards live-status sync while the user is actively dragging/typing a slider.
-  const interactingRef = useRef(false);
+  // Timestamp of the last slider interaction. Live-status sync is skipped for a
+  // short grace window so a device echo can't clobber a value mid/just-after a
+  // drag — and, being time-based, it self-recovers if a release event is missed.
+  const lastInteractRef = useRef(0);
 
   // Per-device slider throttle (ms), read once when this tab mounts.
   const throttleRef = useRef<number | null>(null);
@@ -143,47 +160,50 @@ export default function ControlTab() {
 
   // One throttled sender per slider (stable across renders).
   const sendersRef = useRef({
-    brightness: makeThrottledSender((v) => bleService.setBrightness(v), getThrottle),
-    contrast: makeThrottledSender((v) => bleService.setContrast(v), getThrottle),
-    enhancement: makeThrottledSender((v) => bleService.setEnhancement(v), getThrottle),
-    zoom: makeThrottledSender((v) => bleService.setZoom(v), getThrottle),
+    brightness: makeThrottledSender((v) => bleService.setBrightness(v), getThrottle, reportError),
+    contrast: makeThrottledSender((v) => bleService.setContrast(v), getThrottle, reportError),
+    enhancement: makeThrottledSender((v) => bleService.setEnhancement(v), getThrottle, reportError),
+    zoom: makeThrottledSender((v) => bleService.setZoom(v), getThrottle, reportError),
   });
 
   useEffect(() => {
     const unsubscribe = bleService.onStatusUpdate((newStatus) => {
-      setStatus(newStatus);
       if (newStatus.activeProfile !== undefined) setActiveProfile(newStatus.activeProfile);
 
-      // Don't stomp on a control the user is mid-interaction with.
-      if (!interactingRef.current) {
+      // Don't stomp on a slider the user just touched (500ms grace window).
+      if (Date.now() - lastInteractRef.current > 500) {
         if (newStatus.brightness !== undefined) setBrightness(newStatus.brightness);
         if (newStatus.contrast !== undefined) setContrast(newStatus.contrast);
         if (newStatus.enhancement !== undefined) setEnhancement(newStatus.enhancement);
       }
       // palette intentionally NOT synced from status (unknown on P6 cameras).
     });
-    return unsubscribe;
+    const senders = sendersRef.current;
+    return () => {
+      unsubscribe();
+      senders.brightness.cancel();
+      senders.contrast.cancel();
+      senders.enhancement.cancel();
+      senders.zoom.cancel();
+    };
   }, []);
 
-  const fail = (error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error);
-    bleService.setLocalStatusMessage(message, 'error');
-  };
+  const fail = reportError;
 
   type SliderKey = 'brightness' | 'contrast' | 'enhancement' | 'zoom';
 
   // While dragging: update the thumb immediately + send a throttled live update.
   const onSlide = (key: SliderKey, setter: (v: number) => void) => (v: number) => {
-    interactingRef.current = true;
+    lastInteractRef.current = Date.now();
     setter(v);
     sendersRef.current[key].push(v);
   };
 
-  // On release: guarantee the final value is sent (surfacing any error).
+  // On release: guarantee the final value is sent, and keep the grace window open.
   const onSlideEnd = (key: SliderKey, setter: (v: number) => void) => (v: number) => {
     setter(v);
-    sendersRef.current[key].flush(v, fail);
-    interactingRef.current = false;
+    sendersRef.current[key].flush(v);
+    lastInteractRef.current = Date.now();
   };
 
   const handlePalette = (next: PaletteIndex) => {

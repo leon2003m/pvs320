@@ -33,6 +33,16 @@ interface SavedPasswordEntry {
   name?: string;
 }
 
+// Never log/mirror secrets in cleartext (password ops go to the debug console
+// and the server log sink).
+const SECRET_OPS = new Set(['auth.login', 'device.setPassword']);
+function redactArgs(op: string, args: Record<string, unknown>): Record<string, unknown> {
+  if (SECRET_OPS.has(op) && args && 'password' in args) {
+    return { ...args, password: '***' };
+  }
+  return args;
+}
+
 type PendingRequest = {
   resolve: (value: any) => void;
   reject: (reason?: unknown) => void;
@@ -118,7 +128,9 @@ class ThermalBLEService implements BLEService {
   private requestCounter = 0;
   private lastStateSeq = -1;
   private connectedDeviceKey: string | null = null;
-  private autoLoginSuppressed = false;
+  // Device key that was explicitly logged out — auto-login stays suppressed only
+  // for THAT camera (so logging out of one doesn't block auto-login on another).
+  private suppressedKey: string | null = null;
   private rpcBuffer = '';
   private stateBuffer = '';
   private logBuffer = '';
@@ -394,17 +406,18 @@ class ThermalBLEService implements BLEService {
   }
 
   async tryAutoLogin(): Promise<boolean> {
-    if (this.autoLoginSuppressed) return false;
     if (this.status?.authenticated) return false;
     const key = this.getConnectedDeviceKey();
+    if (this.suppressedKey && this.suppressedKey === key) return false; // just logged out of this one
     const saved = this.getSavedPassword(key);
     if (!saved) return false;
     try {
       await this.login(saved, true);
       return true;
     } catch {
-      // Stored password no longer works (e.g. changed on the device) — forget it.
-      this.forgetSavedPassword(key);
+      // Stored password no longer works (e.g. changed on the device) — forget it,
+      // but only for a stable per-device id key (a name fallback may be shared).
+      if (key && key.startsWith('id:')) this.forgetSavedPassword(key);
       return false;
     }
   }
@@ -769,8 +782,11 @@ class ThermalBLEService implements BLEService {
   };
 
   async disconnect() {
-    // Explicit logout: don't immediately auto-login again on the next connect.
-    this.autoLoginSuppressed = true;
+    // Explicit logout: suppress auto-login for THIS camera only, until manual login.
+    this.suppressedKey = this.getConnectedDeviceKey();
+    // Keep mock mode consistent (so a mock logout actually shows the lock screen).
+    this.mockStatus.authenticated = false;
+    this.mockStatus.authStatus = 'required';
     this.rejectPendingRequests(new BLEProtocolError('disconnected', 'Disconnected by user'));
     if (this.device) {
       this.device.removeEventListener('gattserverdisconnected', this.handleDisconnected);
@@ -831,7 +847,7 @@ class ThermalBLEService implements BLEService {
       args
     });
 
-    this.addLog('send', payload);
+    this.addLog('send', JSON.stringify({ v: PROTOCOL_VERSION, type: 'request', id, op, args: redactArgs(op, args) }));
 
     const encoder = new TextEncoder();
     const bytes = encoder.encode(payload);
@@ -883,7 +899,7 @@ class ThermalBLEService implements BLEService {
       throw new BLEProtocolError('auth_unconfirmed', 'Authentication was not confirmed by the device.');
     }
 
-    this.autoLoginSuppressed = false;
+    this.suppressedKey = null;
     if (remember) {
       this.savePassword(this.getConnectedDeviceKey(), password, this.status?.bleName);
     }
@@ -1044,7 +1060,7 @@ class ThermalBLEService implements BLEService {
   }
 
   private async mockRequest<TResult>(op: string, args: Record<string, unknown>) {
-    this.addLog('send', JSON.stringify({ v: PROTOCOL_VERSION, type: 'request', op, args }));
+    this.addLog('send', JSON.stringify({ v: PROTOCOL_VERSION, type: 'request', op, args: redactArgs(op, args) }));
     await new Promise(resolve => setTimeout(resolve, 120));
 
     if (op === 'auth.login') {

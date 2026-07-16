@@ -16,7 +16,8 @@ export default function App() {
   const [toastIsError, setToastIsError] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
   const [headerClicks, setHeaderClicks] = useState(0);
-  const shownAuthToast = React.useRef<string | null>(null);
+  const shownToast = React.useRef<string | null>(null);
+  const hideTimer = React.useRef<number | null>(null);
 
   useEffect(() => {
     if (headerClicks === 3) {
@@ -30,30 +31,28 @@ export default function App() {
   useEffect(() => {
     const unsubscribe = bleService.onStatusUpdate((newStatus) => {
       setStatus(newStatus ? { ...newStatus } : null);
-      
+
+      const isError = !!newStatus?.lastErrorMessage;
       const msg = newStatus?.lastErrorMessage || newStatus?.lastResponse;
       if (!msg) return;
 
-      const lowerMsg = msg.toLowerCase();
-      const isAuthMsg = lowerMsg.includes('authenticated');
-      const isOkMsg = lowerMsg.startsWith('ok ');
-      const isSuccessMsg = isAuthMsg || isOkMsg || !newStatus?.lastErrorMessage;
-      
-      if (isSuccessMsg && shownAuthToast.current === msg) return;
-      if (isSuccessMsg) shownAuthToast.current = msg;
+      // De-dup ALL messages: since state frames no longer clear lastErrorMessage,
+      // an unchanged message must not re-fire the toast on every status push.
+      if (shownToast.current === msg) return;
+      shownToast.current = msg;
 
       setToastMsg(msg);
-      setToastIsError(!!newStatus?.lastErrorMessage);
+      setToastIsError(isError);
       setShowToast(true);
-      const timer = setTimeout(() => setShowToast(false), 3000);
-      return () => clearTimeout(timer);
+      if (hideTimer.current) window.clearTimeout(hideTimer.current);
+      hideTimer.current = window.setTimeout(() => setShowToast(false), 3000);
     });
     return unsubscribe;
   }, []);
 
   useEffect(() => {
     if (!status?.authenticated) {
-      shownAuthToast.current = null;
+      shownToast.current = null;
     }
   }, [status?.authenticated]);
 
