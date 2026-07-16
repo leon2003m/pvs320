@@ -81,6 +81,44 @@ function SliderGroup({ label, value, min, max, onChange, onRelease, icon: Icon }
   );
 }
 
+// Sends at most one command per `intervalMs` while a value is changing, and
+// always delivers the final value. This gives smooth live updates during a drag
+// AND guarantees the last value lands even if the release event is missed.
+function makeThrottledSender(send: (v: number) => Promise<void>, intervalMs = 120) {
+  let lastSent = 0;
+  let timer: number | null = null;
+  let pending: number | null = null;
+
+  const dispatch = (v: number, onError?: (e: unknown) => void) => {
+    lastSent = Date.now();
+    void send(v).catch((e) => onError?.(e));
+  };
+
+  return {
+    // Called continuously during a drag — coalesced + rate-limited.
+    push(v: number) {
+      pending = v;
+      const wait = intervalMs - (Date.now() - lastSent);
+      if (wait <= 0) {
+        if (timer !== null) { clearTimeout(timer); timer = null; }
+        const val = pending; pending = null;
+        dispatch(val);
+      } else if (timer === null) {
+        timer = window.setTimeout(() => {
+          timer = null;
+          if (pending !== null) { const val = pending; pending = null; dispatch(val); }
+        }, wait);
+      }
+    },
+    // Called on release — cancels any pending throttle and sends immediately.
+    flush(v: number, onError?: (e: unknown) => void) {
+      if (timer !== null) { clearTimeout(timer); timer = null; }
+      pending = null;
+      dispatch(v, onError);
+    },
+  };
+}
+
 export default function ControlTab() {
   const [, setStatus] = useState<DeviceStatus | null>(null);
   const [activeProfile, setActiveProfile] = useState(0);
@@ -94,8 +132,14 @@ export default function ControlTab() {
 
   // Guards live-status sync while the user is actively dragging/typing a slider.
   const interactingRef = useRef(false);
-  // Last values the device accepted, used to roll back a failed change.
-  const committedRef = useRef({ brightness: 128, contrast: 4, enhancement: 4, zoom: 10 });
+
+  // One throttled sender per slider (stable across renders).
+  const sendersRef = useRef({
+    brightness: makeThrottledSender((v) => bleService.setBrightness(v)),
+    contrast: makeThrottledSender((v) => bleService.setContrast(v)),
+    enhancement: makeThrottledSender((v) => bleService.setEnhancement(v)),
+    zoom: makeThrottledSender((v) => bleService.setZoom(v)),
+  });
 
   useEffect(() => {
     const unsubscribe = bleService.onStatusUpdate((newStatus) => {
@@ -104,18 +148,9 @@ export default function ControlTab() {
 
       // Don't stomp on a control the user is mid-interaction with.
       if (!interactingRef.current) {
-        if (newStatus.brightness !== undefined) {
-          setBrightness(newStatus.brightness);
-          committedRef.current.brightness = newStatus.brightness;
-        }
-        if (newStatus.contrast !== undefined) {
-          setContrast(newStatus.contrast);
-          committedRef.current.contrast = newStatus.contrast;
-        }
-        if (newStatus.enhancement !== undefined) {
-          setEnhancement(newStatus.enhancement);
-          committedRef.current.enhancement = newStatus.enhancement;
-        }
+        if (newStatus.brightness !== undefined) setBrightness(newStatus.brightness);
+        if (newStatus.contrast !== undefined) setContrast(newStatus.contrast);
+        if (newStatus.enhancement !== undefined) setEnhancement(newStatus.enhancement);
       }
       // palette intentionally NOT synced from status (unknown on P6 cameras).
     });
@@ -127,27 +162,20 @@ export default function ControlTab() {
     bleService.setLocalStatusMessage(message, 'error');
   };
 
-  // onChange during drag/type just updates local state and marks "interacting".
-  const startInteract = (setter: (v: number) => void) => (v: number) => {
+  type SliderKey = 'brightness' | 'contrast' | 'enhancement' | 'zoom';
+
+  // While dragging: update the thumb immediately + send a throttled live update.
+  const onSlide = (key: SliderKey, setter: (v: number) => void) => (v: number) => {
     interactingRef.current = true;
     setter(v);
+    sendersRef.current[key].push(v);
   };
 
-  // onRelease sends the command; on failure it rolls the value back.
-  const commit = (
-    setter: (v: number) => void,
-    key: 'brightness' | 'contrast' | 'enhancement' | 'zoom',
-    send: (v: number) => Promise<void>,
-  ) => (v: number) => {
-    interactingRef.current = false;
-    const prev = committedRef.current[key];
+  // On release: guarantee the final value is sent (surfacing any error).
+  const onSlideEnd = (key: SliderKey, setter: (v: number) => void) => (v: number) => {
     setter(v);
-    void send(v)
-      .then(() => { committedRef.current[key] = v; })
-      .catch((error) => {
-        setter(prev);
-        fail(error);
-      });
+    sendersRef.current[key].flush(v, fail);
+    interactingRef.current = false;
   };
 
   const handlePalette = (next: PaletteIndex) => {
@@ -168,12 +196,6 @@ export default function ControlTab() {
         setContrast(profile.contrast);
         setEnhancement(profile.enhancement);
         setPalette(profile.palette);
-        committedRef.current = {
-          brightness: profile.brightness,
-          contrast: profile.contrast,
-          enhancement: profile.enhancement,
-          zoom: committedRef.current.zoom,
-        };
         await bleService.applyProfile(p);
       } catch (error) {
         fail(error);
@@ -247,8 +269,8 @@ export default function ControlTab() {
           min={0}
           max={255}
           icon={Sun}
-          onChange={startInteract(setBrightness)}
-          onRelease={commit(setBrightness, 'brightness', (v) => bleService.setBrightness(v))}
+          onChange={onSlide('brightness', setBrightness)}
+          onRelease={onSlideEnd('brightness', setBrightness)}
         />
 
         <SliderGroup
@@ -257,8 +279,8 @@ export default function ControlTab() {
           min={0}
           max={7}
           icon={Contrast}
-          onChange={startInteract(setContrast)}
-          onRelease={commit(setContrast, 'contrast', (v) => bleService.setContrast(v))}
+          onChange={onSlide('contrast', setContrast)}
+          onRelease={onSlideEnd('contrast', setContrast)}
         />
 
         <SliderGroup
@@ -267,8 +289,8 @@ export default function ControlTab() {
           min={0}
           max={7}
           icon={Zap}
-          onChange={startInteract(setEnhancement)}
-          onRelease={commit(setEnhancement, 'enhancement', (v) => bleService.setEnhancement(v))}
+          onChange={onSlide('enhancement', setEnhancement)}
+          onRelease={onSlideEnd('enhancement', setEnhancement)}
         />
 
         <SliderGroup
@@ -277,8 +299,8 @@ export default function ControlTab() {
           min={10}
           max={40}
           icon={Maximize}
-          onChange={startInteract(setZoom)}
-          onRelease={commit(setZoom, 'zoom', (v) => bleService.setZoom(v))}
+          onChange={onSlide('zoom', setZoom)}
+          onRelease={onSlideEnd('zoom', setZoom)}
         />
       </div>
     </div>
