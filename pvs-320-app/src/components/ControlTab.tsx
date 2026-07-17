@@ -81,49 +81,54 @@ function SliderGroup({ label, value, min, max, onChange, onRelease, icon: Icon }
   );
 }
 
-// Sends at most one command per throttle interval while a value is changing, and
-// always delivers the final value. This gives smooth live updates during a drag
-// AND guarantees the last value lands even if the release event is missed.
-// `getInterval` is read live so the per-device throttle setting takes effect.
-function makeThrottledSender(
+// Backpressure-based sender: keeps only the LATEST value and sends it only when
+// the previous send has actually completed — so there is never more than one
+// write in flight and a queue can't build up on the shared BLE write chain
+// (a wall-clock throttle would pile up sends whenever the link is slower than
+// the interval). Auto-adapts to link speed and still guarantees the final value.
+// `getMinGapMs` is an optional floor between sends (the per-device setting) so
+// the user can go even gentler on a weak link; it never causes queueing.
+function makeBackpressureSender(
   send: (v: number) => Promise<void>,
-  getInterval: () => number,
+  getMinGapMs: () => number,
   onError?: (e: unknown) => void,
 ) {
-  let lastSent = 0;
-  let timer: number | null = null;
+  let inFlight = false;
   let pending: number | null = null;
+  let lastSentAt = 0;
+  let timer: number | null = null;
 
-  // Every dispatch (live, trailing, and final flush) surfaces errors, so a
-  // failed send is never silent — including the trailing "missed release" send.
-  const dispatch = (v: number) => {
-    lastSent = Date.now();
-    void send(v).catch((e) => onError?.(e));
+  const pump = () => {
+    if (inFlight || pending === null) return;
+    const wait = getMinGapMs() - (Date.now() - lastSentAt);
+    if (wait > 0) {
+      if (timer === null) timer = window.setTimeout(() => { timer = null; pump(); }, wait);
+      return;
+    }
+    const v = pending;
+    pending = null;
+    inFlight = true;
+    lastSentAt = Date.now();
+    // Errors surface (deduped by the toast layer). finally -> pump keeps the
+    // single-in-flight loop going and flushes the latest pending value.
+    void send(v)
+      .catch((e) => onError?.(e))
+      .finally(() => { inFlight = false; pump(); });
   };
 
   return {
-    // Called continuously during a drag — coalesced + rate-limited.
-    push(v: number) {
-      pending = v;
-      const wait = getInterval() - (Date.now() - lastSent);
-      if (wait <= 0) {
-        if (timer !== null) { clearTimeout(timer); timer = null; }
-        const val = pending; pending = null;
-        dispatch(val);
-      } else if (timer === null) {
-        timer = window.setTimeout(() => {
-          timer = null;
-          if (pending !== null) { const val = pending; pending = null; dispatch(val); }
-        }, wait);
-      }
-    },
-    // Called on release — cancels any pending throttle and sends immediately.
+    // During a drag: remember the latest value; it goes out as soon as the link
+    // is free (and no sooner than the min gap). Intermediate values are dropped.
+    push(v: number) { pending = v; pump(); },
+    // On release: guarantee the final value — bypass the min-gap wait, but still
+    // respect the single in-flight write, so it lands right after the current one.
     flush(v: number) {
+      pending = v;
+      lastSentAt = 0;
       if (timer !== null) { clearTimeout(timer); timer = null; }
-      pending = null;
-      dispatch(v);
+      pump();
     },
-    // Called on unmount — drop any pending trailing timer so it can't fire late.
+    // On unmount: drop any pending value / timer so nothing fires late.
     cancel() {
       if (timer !== null) { clearTimeout(timer); timer = null; }
       pending = null;
@@ -158,12 +163,12 @@ export default function ControlTab() {
   }
   const getThrottle = () => throttleRef.current ?? 120;
 
-  // One throttled sender per slider (stable across renders).
+  // One backpressure sender per slider (stable across renders).
   const sendersRef = useRef({
-    brightness: makeThrottledSender((v) => bleService.setBrightness(v), getThrottle, reportError),
-    contrast: makeThrottledSender((v) => bleService.setContrast(v), getThrottle, reportError),
-    enhancement: makeThrottledSender((v) => bleService.setEnhancement(v), getThrottle, reportError),
-    zoom: makeThrottledSender((v) => bleService.setZoom(v), getThrottle, reportError),
+    brightness: makeBackpressureSender((v) => bleService.setBrightness(v), getThrottle, reportError),
+    contrast: makeBackpressureSender((v) => bleService.setContrast(v), getThrottle, reportError),
+    enhancement: makeBackpressureSender((v) => bleService.setEnhancement(v), getThrottle, reportError),
+    zoom: makeBackpressureSender((v) => bleService.setZoom(v), getThrottle, reportError),
   });
 
   useEffect(() => {

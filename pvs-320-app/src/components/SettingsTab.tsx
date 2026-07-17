@@ -215,7 +215,7 @@ export default function SettingsTab() {
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
               <p className="font-semibold text-slate-200">Live update rate</p>
-              <p className="text-xs text-slate-500">How often sliders send while dragging. Lower = snappier; higher = gentler on a weak BLE link.</p>
+              <p className="text-xs text-slate-500">Minimum gap between slider commands. Sends already wait for the previous one to finish (no queue); raise this to go even gentler on a weak link.</p>
             </div>
             <select
               value={sliderThrottle}
@@ -230,7 +230,7 @@ export default function SettingsTab() {
               <option value={300}>Weak link (300ms)</option>
             </select>
           </div>
-          <p className="text-[11px] text-slate-500">Saved per camera. The final value is always sent on release regardless of this setting.</p>
+          <p className="text-[11px] text-slate-500">Saved per camera. The final value is always sent on release.</p>
         </div>
       </section>
 
